@@ -59,20 +59,44 @@ async function sbFetchAll(path, chunk = 1000) {
   return all;
 }
 
-// Вход по email + паролю через Supabase Auth
-// Текущий пользователь (после входа). Используется для определения роли.
-let CURRENT_USER = null;
-// Кто считается администратором (видит режим редактора и ключ remove.bg).
-// Роль берём из user_metadata.role / app_metadata.role == 'admin' (надёжно),
-// либо по списку email ниже (запасной вариант, если метаданные не проставлены).
-const ADMIN_EMAILS = ["simonakhatipova@gmail.com"]; // ← замените на вашу реальную почту-редактора
-function isAdminUser(u) {
-  if (!u) return false;
-  const role = (u.app_metadata && u.app_metadata.role) || (u.user_metadata && u.user_metadata.role) || "";
-  if (String(role).toLowerCase() === "admin") return true;
-  return ADMIN_EMAILS.map(e => e.toLowerCase()).includes((u.email || "").toLowerCase());
+// Загрузка ОСТАЛЬНЫХ строк начиная со смещения `from` (для фоновой догрузки
+// после того, как первая страница уже показана пользователю).
+async function sbFetchFrom(path, from, chunk = 1000) {
+  const all = [];
+  let total = Infinity;
+  for (let guard = 0; guard < 100000; guard++) {
+    const to = from + chunk - 1;
+    const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+      headers: { ...authHeaders(), "Range-Unit": "items", "Range": `${from}-${to}`, "Prefer": "count=exact" },
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const cr = res.headers.get("content-range") || res.headers.get("Content-Range");
+    if (cr) { const m = cr.match(/\/(\d+|\*)\s*$/); if (m && m[1] !== "*") total = Number(m[1]); }
+    const text = await res.text();
+    const part = text ? JSON.parse(text) : [];
+    all.push(...part);
+    if (part.length === 0) break;
+    from += part.length;
+    if (from >= total) break;
+  }
+  return all;
 }
 
+// Первая страница (быстрый показ). Возвращает { rows, total }.
+async function sbFetchFirstPage(path, pageSize = 200) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+    headers: { ...authHeaders(), "Range-Unit": "items", "Range": `0-${pageSize - 1}`, "Prefer": "count=exact" },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const cr = res.headers.get("content-range") || res.headers.get("Content-Range");
+  let total = Infinity;
+  if (cr) { const m = cr.match(/\/(\d+|\*)\s*$/); if (m && m[1] !== "*") total = Number(m[1]); }
+  const text = await res.text();
+  const rows = text ? JSON.parse(text) : [];
+  return { rows, total };
+}
+
+// Вход по email + паролю через Supabase Auth
 async function signIn(email, password) {
   const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
     method: "POST",
@@ -82,14 +106,12 @@ async function signIn(email, password) {
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error_description || data?.msg || "Ошибка входа");
   ACCESS_TOKEN = data.access_token;
-  CURRENT_USER = data.user || null;
   try { localStorage.setItem("sb_token", data.access_token); } catch {}
   return data;
 }
 
 function signOut() {
   ACCESS_TOKEN = null;
-  CURRENT_USER = null;
   try { localStorage.removeItem("sb_token"); } catch {}
 }
 
@@ -103,7 +125,6 @@ async function restoreSession() {
   });
   if (!res.ok) { signOut(); return false; }
   ACCESS_TOKEN = token;
-  CURRENT_USER = await res.json().catch(() => null);
   return true;
 }
 
@@ -137,7 +158,7 @@ function productAttributes(p) {
   if (t.includes("маск") || t.includes("кондиционер")) {
     ["moisture", "nutrition", "repair", "protection"].forEach((k) => {
       const v = p["attr_" + k];
-      if (v === "full") tags.push({ text: FN_META[k].label, hue: FN_META[k].hue, strong: true });
+      if (v === "full" || v === true) tags.push({ text: FN_META[k].label, hue: FN_META[k].hue, strong: true });
       else if (v === "some") tags.push({ text: FN_META[k].some, hue: FN_META[k].hue, strong: false });
     });
     if (p.attr_curls === true) tags.push({ text: "Подходит кудряшкам", hue: "#9a5fb0", strong: true });
@@ -157,61 +178,7 @@ function productAttributes(p) {
   return tags;
 }
 
-// ─── НОРМАЛИЗАЦИЯ ВИДА СРЕДСТВА (только для отображения; БД не меняем) ─────────
-// Приводим разнобой написаний к единому виду и раскладываем по двум уровням:
-// группа (Волосы / Лицо и тело / Укладка / Прочее) → канонический вид.
-// canonType: raw product_type → каноническое название (с заглавной).
-function canonType(raw) {
-  const t = (raw || "").trim().toLowerCase();
-  if (!t || t === "не указан" || t === "средство") return "Прочее";
-  if (t.includes("шампунь")) return "Шампунь";
-  if (t.includes("ко-вошинг")) return "Ко-вошинг";
-  if (t.includes("кондиционер") || t.includes("маск")) return "Маска / Кондиционер";
-  if (t.includes("бальзам для губ") || t.includes("скраб для губ")) return "Уход за губами";
-  if (t.includes("спрей")) return "Спрей";
-  if (t.includes("сыворотк") || t === "ампула" || t === "концентрат" || t === "эссенция" || t === "флюид" || t === "мезококтейль") return "Сыворотка / эссенция";
-  if (t.includes("крем")) return "Крем";
-  if (t === "spf") return "SPF";
-  if (t.includes("масло")) return "Масло";
-  if (t.includes("пилинг")) return "Пилинг";
-  if (t.includes("скраб")) return "Скраб";
-  if (t.includes("тонер") || t.includes("тоник")) return "Тонер";
-  if (t.includes("гель")) return "Гель";
-  if (t.includes("лосьон")) return "Лосьон";
-  if (t.includes("молочк")) return "Молочко";
-  if (t.includes("мицелляр")) return "Мицеллярная вода";
-  if (t.includes("пенка")) return "Пенка для умывания";
-  if (t.includes("пудра")) return "Пудра";
-  if (t.includes("очищ") || t === "шго") return "Очищение";
-  if (t.includes("несмываем")) return "Несмываемое средство";
-  if (t.includes("салфетк")) return "Салфетки";
-  if (t.includes("хелат")) return "Хелатное";
-  if (t.startsWith("укладка")) {
-    if (t.includes("гель")) return "Укладка: гель";
-    if (t.includes("пенк")) return "Укладка: пенка";
-    if (t.includes("текстур")) return "Укладка: текстурайзер";
-    return "Укладка";
-  }
-  if (t.includes("консилер") || t.includes("тональн") || t.includes("праймер") || t.includes("основа под макияж") || t.includes("крем для глаз")) return "Макияж";
-  // прочее — с заглавной буквы
-  return raw.trim().charAt(0).toUpperCase() + raw.trim().slice(1);
-}
-// группа верхнего уровня для канонического вида
-const TYPE_GROUP_MAP = {
-  "Шампунь": "Волосы", "Маска / Кондиционер": "Волосы", "Ко-вошинг": "Волосы",
-  "Масло": "Волосы", "Несмываемое средство": "Волосы", "Хелатное": "Волосы",
-  "Укладка": "Укладка", "Укладка: гель": "Укладка", "Укладка: пенка": "Укладка", "Укладка: текстурайзер": "Укладка",
-  "Крем": "Лицо и тело", "Сыворотка / эссенция": "Лицо и тело", "SPF": "Лицо и тело",
-  "Тонер": "Лицо и тело", "Пилинг": "Лицо и тело", "Скраб": "Лицо и тело", "Гель": "Лицо и тело",
-  "Лосьон": "Лицо и тело", "Молочко": "Лицо и тело", "Мицеллярная вода": "Лицо и тело",
-  "Пенка для умывания": "Лицо и тело", "Пудра": "Лицо и тело", "Очищение": "Лицо и тело",
-  "Уход за губами": "Лицо и тело", "Салфетки": "Лицо и тело", "Макияж": "Лицо и тело",
-};
-const typeGroup = (canon) => TYPE_GROUP_MAP[canon] || "Прочее";
-// «Универсальные» виды для раздела «Все виды» (не привязаны к одному типу средства)
-const GROUP_ORDER = ["Волосы", "Лицо и тело", "Укладка", "Прочее"];
-
-
+// ─── ОПИСАНИЯ ГРУПП/ПОДГРУПП (демо; в бою — из таблицы subgroups) ─────────────
 // ключ: "group" | "group::subgroup" | "group::subgroup::subgroup2"
 const SUBGROUP_DESC = {
   "ПАВ": "Поверхностно-активные вещества это основа очищения. Связывают жир и грязь, смываются водой. Чем агрессивнее ПАВ, тем сильнее очищение, но выше риск пересушивания.",
@@ -242,37 +209,63 @@ const descFor = (map, group, subgroup, subgroup2) => {
 };
 
 // ─── ДВИЖОК ПОХОЖЕСТИ ПО СОСТАВУ ─────────────────────────────────────────────
-// Гибрид: пересечение ингредиентов (с весом по позиции — верх состава важнее)
-// + совпадение по группам. Возвращает оценку 0..100.
+// Сравниваем только АКТИВНУЮ часть состава: ингредиенты до первой отдушки (~>1%).
+// После первой отдушки концентрации <1% — менее значимы для функционального сходства.
 const normInci = (s) => (s || "").toLowerCase().replace(/[^a-zа-я0-9 ]/gi, "").trim();
+
+// Взять только активную часть (до первой отдушки включительно, или весь список если отдушек нет)
+function activeIngredients(list) {
+  const fragIdx = list.findIndex(x => (x.group || "").toLowerCase().includes("отдушк"));
+  return fragIdx > 0 ? list.slice(0, fragIdx) : list;
+}
+
 // вес ингредиента по позиции: топ-5 важнее хвоста
-const posWeight = (pos, total) => {
+const posWeight = (pos) => {
   if (!pos) return 0.4;
   if (pos <= 3) return 1;
-  if (pos <= 6) return 0.7;
-  if (pos <= 10) return 0.45;
-  return 0.25;
+  if (pos <= 6) return 0.75;
+  if (pos <= 10) return 0.5;
+  return 0.3;
 };
+
 function compositionSimilarity(listA, listB) {
-  // listA/listB: [{ inci, group, position }]
-  const mapB = new Map(listB.map(x => [normInci(x.inci), x]));
-  let shared = 0, weightSum = 0, sharedNames = [];
-  for (const a of listA) {
-    const w = posWeight(a.position, listA.length);
+  // работаем только с активной частью обоих составов
+  const actA = activeIngredients(listA);
+  const actB = activeIngredients(listB);
+  if (!actA.length || !actB.length) return { score: 0, sharedNames: [] };
+
+  const mapB = new Map(actB.map(x => [normInci(x.inci), x]));
+  let shared = 0, weightSum = 0;
+  const sharedNames = [];
+  for (const a of actA) {
+    const w = posWeight(a.position);
     weightSum += w;
     if (mapB.has(normInci(a.inci))) { shared += w; sharedNames.push(a.inci); }
   }
-  const ingScore = weightSum ? shared / weightSum : 0;
-  // совпадение по группам (множества)
-  const gA = new Set(listA.map(x => x.group).filter(Boolean));
-  const gB = new Set(listB.map(x => x.group).filter(Boolean));
+  // симметричный счёт: берём среднее между "сколько A нашлось в B" и "сколько B нашлось в A"
+  const mapA = new Map(actA.map(x => [normInci(x.inci), x]));
+  let sharedRev = 0, weightSumRev = 0;
+  for (const b of actB) {
+    const w = posWeight(b.position);
+    weightSumRev += w;
+    if (mapA.has(normInci(b.inci))) sharedRev += w;
+  }
+  const scoreA = weightSum ? shared / weightSum : 0;
+  const scoreB = weightSumRev ? sharedRev / weightSumRev : 0;
+  const ingScore = (scoreA + scoreB) / 2;
+
+  // совпадение по группам (только активной части)
+  const gA = new Set(actA.map(x => x.group).filter(Boolean));
+  const gB = new Set(actB.map(x => x.group).filter(Boolean));
   const inter = [...gA].filter(g => gB.has(g)).length;
   const uni = new Set([...gA, ...gB]).size;
   const grpScore = uni ? inter / uni : 0;
-  // гибрид: 65% ингредиенты, 35% группы
-  const score = Math.round((ingScore * 0.65 + grpScore * 0.35) * 100);
+
+  // гибрид: 70% ингредиенты, 30% группы
+  const score = Math.round((ingScore * 0.70 + grpScore * 0.30) * 100);
   return { score, sharedNames };
 }
+
 // привести продукт из БД к списку для движка
 const toCompList = (p) => p.ingredients.map(r => ({ inci: r.ing.inci_name, group: r.ing.group, position: r.position }));
 
@@ -292,18 +285,17 @@ function detectType(list) {
   for (const r of TYPE_RULES) { if (r.test(gs, names)) return r.type; }
   return null;
 }
-// найти похожие в БД. Сортировка по умолчанию — по сходству состава (цена вторична при равенстве)
+// найти похожие в БД. Строго исключаем sourceProduct по id.
 function findSimilar(targetList, sourceProduct, allProducts, { sameType = true, order = "match" } = {}) {
+  const sourceId = sourceProduct?.id;
   const list = allProducts
-    .filter(p => !sourceProduct || p.id !== sourceProduct.id)
+    .filter(p => p.id !== sourceId)                            // исключаем само средство
     .filter(p => !sameType || !sourceProduct || p.product_type === sourceProduct.product_type)
     .map(p => ({ product: p, ...compositionSimilarity(targetList, toCompList(p)) }))
-    .filter(x => x.score >= 25);
+    .filter(x => x.score >= 20);
   if (order === "price") {
-    // по лучшей цене, при равной цене — более похожие выше
     list.sort((a, b) => (a.product.price_rub || 0) - (b.product.price_rub || 0) || b.score - a.score);
   } else {
-    // по лучшему совпадению состава, при равном совпадении — дешевле выше
     list.sort((a, b) => b.score - a.score || (a.product.price_rub || 0) - (b.product.price_rub || 0));
   }
   return list;
@@ -325,7 +317,7 @@ const styles = `
     /* СТЕКЛО — едва тёплое, кремово-нефритовое: убирает диссонанс при открытии карточки */
     --glass: rgba(255,253,250,0.62);
     --glass-strong: rgba(255,253,249,0.82);
-    --glass-warm: rgba(252,248,242,0.78);   /* тёплая подложка модалки */
+    --glass-warm: rgba(240,247,250,0.8);    /* прохладная подложка модалки/панелей */
     --glass-border: rgba(255,255,255,0.72);
     --glass-hairline: rgba(120,140,128,0.18);
 
@@ -338,7 +330,8 @@ const styles = `
     --line: rgba(60,110,88,0.15);
     --shadow: 0 8px 32px rgba(15,75,55,0.14);
     --shadow-sm: 0 2px 14px rgba(15,75,55,0.09);
-    --shadow-warm: 0 18px 50px rgba(80,60,30,0.13);
+    --shadow-warm: 0 18px 50px rgba(30,70,90,0.13);
+    --warm: rgba(236,244,248,0.7);   /* прохладная мягкая заливка (бывш. бежевая) */
     --rose: #c17b8a;
     --warn: #c98a3a;
     --danger: #c0584f;
@@ -347,13 +340,32 @@ const styles = `
   body { font-family: 'Manrope', sans-serif; color: var(--ink); }
 
   .app {
-    min-height: 100vh;
+    min-height: 100vh; position: relative; overflow-x: hidden;
     background:
       radial-gradient(1100px 560px at 8% -12%, #e7eee9 0%, transparent 55%),
       radial-gradient(900px 480px at 102% -4%, #e0e9e3 0%, transparent 52%),
       linear-gradient(165deg, #eef2ef 0%, #dfe8e1 60%, #d6e1da 100%);
     background-attachment: fixed;
   }
+
+  /* ── Падающие цветочки ── */
+  .petals-canvas {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden;
+  }
+  .petal {
+    position: absolute; top: -60px; opacity: 0;
+    animation: petalFall linear infinite;
+    will-change: transform, opacity;
+  }
+  .petal svg { display: block; }
+  @keyframes petalFall {
+    0%   { opacity: 0; transform: translateY(0) rotate(0deg) scale(1); }
+    8%   { opacity: 0.7; }
+    90%  { opacity: 0.5; }
+    100% { opacity: 0; transform: translateY(105vh) rotate(360deg) scale(0.85); }
+  }
+  /* чтобы контент был поверх лепестков */
+  .topbar, .tabs-bar, .main { position: relative; z-index: 2; }
 
   /* ── ШАПКА: движущийся градиент-«шёлк», поверх светлая стеклянная вуаль для читаемости ── */
   .topbar {
@@ -402,8 +414,8 @@ const styles = `
     filter: drop-shadow(0 4px 9px rgba(10,74,53,0.28));
     perspective: 220px;
   }
-  /* колба постоянно медленно вращается влево в 3D-объёме (по оси Y) */
-  .flask-body { transform-box: fill-box; transform-origin: 50% 50%; transform-style: preserve-3d; animation: flask3d 9s linear infinite; }
+  /* колба вращается влево в 3D (по оси Y) */
+  .flask-body { transform-box: fill-box; transform-origin: 50% 50%; transform-style: preserve-3d; animation: flask3d 8s linear infinite; }
   @keyframes flask3d {
     0%   { transform: rotateY(0deg); }
     100% { transform: rotateY(-360deg); }
@@ -441,9 +453,9 @@ const styles = `
     .flask-body, .flask-shade, .flask-drop, .flask-bub { animation: none; }
     .flask-drop { opacity: 0; }
   }
-  .brand-text { display: flex; flex-direction: column; line-height: 1.16; }
-  .brand-text b { font-family: 'Familjen Grotesk', sans-serif; font-weight: 600; font-size: 15.5px; color: #1a1530; letter-spacing: -0.01em; }
-  .brand-text span { font-size: 10px; color: #5a4d72; text-transform: uppercase; letter-spacing: .12em; font-weight: 700; }
+  .brand-text { display: flex; flex-direction: column; line-height: 1.2; align-items: flex-start; }
+  .brand-text b { font-family: 'Familjen Grotesk', sans-serif; font-weight: 700; font-size: 20px; color: #1a1530; letter-spacing: -0.025em; }
+  .brand-text span { font-size: 9.5px; color: #5a4d72; text-transform: uppercase; letter-spacing: .13em; font-weight: 700; }
   .topbar-actions { display: flex; gap: 8px; align-items: center; }
   .topbar .btn-glass { background: rgba(255,255,255,0.55); color: #3a3252; border: 1px solid rgba(255,255,255,0.6); }
   .topbar .btn-glass:hover { background: rgba(255,255,255,0.8); color: #1a1530; }
@@ -477,6 +489,8 @@ const styles = `
   }
   .tab:hover { color: var(--ink-soft); }
   .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab:focus { outline: none; }
+  .tab:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 2px; border-radius: 6px; }
 
   .main { max-width: 1180px; margin: 0 auto; padding: clamp(1rem,3vw,2rem) clamp(1rem,4vw,2.5rem) 4rem; }
 
@@ -499,6 +513,7 @@ const styles = `
     border-radius: 16px; padding: 16px 18px; margin-bottom: 16px;
     box-shadow: var(--shadow-sm);
     animation: filterIn .22s ease;
+    position: relative; z-index: 60;
   }
   @keyframes filterIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
   .filter-field { display: flex; flex-direction: column; gap: 6px; min-width: 168px; flex: 1; }
@@ -511,6 +526,39 @@ const styles = `
     cursor: pointer; outline: none; transition: border-color .2s, background-color .2s;
   }
   .filter-field select:focus { border-color: var(--accent); }
+
+  /* Иерархический фильтр вида средства */
+  .hier-type { position: relative; z-index: 70; }
+  .hier-trigger {
+    width: 100%; display: flex; align-items: center; justify-content: space-between;
+    background: rgba(255,255,255,0.62); border: 1px solid var(--glass-border); border-radius: 11px;
+    padding: 10px 13px; font-size: 13.5px; font-family: inherit; color: var(--ink);
+    cursor: pointer; outline: none; transition: border-color .2s;
+  }
+  .hier-trigger:hover, .hier-trigger:focus { border-color: var(--accent); }
+  .hier-caret { color: var(--accent-deep); font-size: 11px; }
+  .hier-menu {
+    position: absolute; top: calc(100% + 5px); left: 0; right: 0; z-index: 999;
+    background: rgba(255,255,255,0.98); border: 1px solid var(--glass-border); border-radius: 13px;
+    box-shadow: 0 18px 48px rgba(20,50,40,0.22); padding: 6px; min-width: 240px;
+    backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  }
+  .hier-root, .hier-group-head, .hier-item {
+    padding: 9px 12px; border-radius: 9px; font-size: 13.5px; color: var(--ink); cursor: pointer;
+    display: flex; align-items: center; justify-content: space-between; transition: background .12s;
+  }
+  .hier-root:hover, .hier-group:hover > .hier-group-head, .hier-item:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .hier-root.active, .hier-item.active { background: color-mix(in srgb, var(--accent) 22%, transparent); font-weight: 600; }
+  .hier-group { position: relative; }
+  .hier-group-head { font-weight: 600; color: var(--ink-soft); }
+  .hier-group-name { display: inline-flex; align-items: center; gap: 9px; }
+  .hier-ic { display: inline-flex; color: var(--accent-deep); opacity: 0.85; }
+  .hier-arrow { color: var(--accent-deep); font-size: 15px; line-height: 1; }
+  .hier-sub {
+    margin: 2px 0 4px 8px; padding-left: 6px;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  .hier-sub .hier-item { font-size: 13px; padding: 7px 10px; }
   .filter-reset {
     background: none; border: none; cursor: pointer; color: var(--rose);
     font-family: inherit; font-size: 13px; font-weight: 600; padding: 10px 4px; white-space: nowrap;
@@ -547,18 +595,19 @@ const styles = `
   .count { font-size: 13px; color: var(--ink-faint); font-weight: 500; }
 
   /* ── Витрина: вертикальные карточки-банки ── */
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 18px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 18px; position: relative; z-index: 1; }
   .card {
-    background: var(--glass); border: 1px solid var(--glass-border);
-    backdrop-filter: blur(16px) saturate(140%); -webkit-backdrop-filter: blur(16px) saturate(140%);
+    background: linear-gradient(160deg, rgba(225,238,252,0.55), rgba(208,226,244,0.42));
+    border: 1px solid rgba(170,208,238,0.38);
+    backdrop-filter: blur(18px) saturate(120%); -webkit-backdrop-filter: blur(18px) saturate(120%);
     border-radius: 20px; overflow: hidden; cursor: pointer;
-    box-shadow: var(--shadow-sm); transition: transform .18s, box-shadow .25s;
+    box-shadow: 0 2px 12px rgba(30,80,140,0.07); transition: transform .18s, box-shadow .25s;
     display: flex; flex-direction: column;
   }
-  .card:hover { transform: translateY(-4px); box-shadow: var(--shadow); }
+  .card:hover { transform: scale(1.033); box-shadow: 0 8px 28px rgba(30,80,140,0.13); }
   .card-media {
     aspect-ratio: 3 / 4;  /* вертикально-ориентированная банка/флакон */
-    background: linear-gradient(150deg, rgba(255,252,247,0.6), rgba(236,229,217,0.4));
+    background: linear-gradient(150deg, rgba(235,245,255,0.65), rgba(210,228,245,0.45));
     display: flex; align-items: center; justify-content: center;
     position: relative;
   }
@@ -570,8 +619,13 @@ const styles = `
     background: rgba(255,255,255,0.7); backdrop-filter: blur(6px);
     color: var(--ink-soft); padding: 4px 9px; border-radius: 8px;
   }
-  .card-body { padding: 14px 15px 16px; }
-  .card-name { font-family: 'Familjen Grotesk', sans-serif; font-weight: 600; font-size: 14px; line-height: 1.3; letter-spacing: -0.01em; margin-bottom: 5px; }
+  .card-body { padding: 14px 15px 16px; display: flex; flex-direction: column; flex: 1; }
+  .card-name {
+    font-family: 'Familjen Grotesk', sans-serif; font-weight: 600; font-size: 14px; line-height: 1.3;
+    letter-spacing: -0.01em; margin-bottom: 6px;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    min-height: calc(3 * 1.3em);  /* фиксируем высоту под 3 строки — бренд всегда на одном уровне */
+  }
   .card-brand { font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
   .card-fns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
   /* цветное стекло — цвет задаётся инлайн через --fn (hue функции) */
@@ -591,6 +645,30 @@ const styles = `
     font-weight: 600;
   }
 
+  /* ── Блок заметок (notes) в модалке ── */
+  .notes-block {
+    margin-top: 12px; padding: 12px 14px;
+    background: linear-gradient(135deg, rgba(230,244,255,0.6), rgba(218,238,252,0.5));
+    border: 1px solid rgba(100,170,230,0.28); border-radius: 14px;
+  }
+  .notes-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+    border-radius: 20px; padding: 3px 10px; margin-bottom: 7px;
+  }
+  .badge-gold { background: rgba(255,215,0,0.22); color: #8a6a00; border: 1px solid rgba(255,200,0,0.35); }
+  .badge-star { background: rgba(100,160,240,0.18); color: #1a5a9a; border: 1px solid rgba(100,160,240,0.3); }
+  .notes-text { font-size: 13px; color: var(--ink-soft); line-height: 1.55; }
+  /* компактная авто-сводка вместо крупного блока наград */
+  .summary-block {
+    margin-top: 12px; padding: 11px 14px;
+    background: linear-gradient(135deg, rgba(225,242,235,0.55), rgba(214,236,228,0.45));
+    border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent); border-radius: 13px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .summary-block .notes-badge { margin-bottom: 0; align-self: flex-start; }
+  .summary-text { font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; }
+
   /* ── Модалка карточки продукта ── */
   .overlay {
     position: fixed; inset: 0; z-index: 200;
@@ -600,19 +678,20 @@ const styles = `
   }
   .modal {
     width: 100%; max-width: 880px; margin: auto;
-    background: var(--glass-warm); border: 1px solid var(--glass-border);
+    background: linear-gradient(160deg, rgba(240,248,255,0.82), rgba(228,241,237,0.78));
+    border: 1px solid rgba(180,215,240,0.55);
     backdrop-filter: blur(34px) saturate(150%); -webkit-backdrop-filter: blur(34px) saturate(150%);
-    border-radius: 24px; box-shadow: var(--shadow-warm);
+    border-radius: 24px; box-shadow: 0 18px 50px rgba(30,80,140,0.13);
     overflow: hidden;
   }
   .modal-head { display: grid; grid-template-columns: 280px 1fr; gap: 0; }
   @media (max-width: 640px) { .modal-head { grid-template-columns: 1fr; } }
   .modal-media {
     aspect-ratio: 3 / 4;
-    background: linear-gradient(150deg, rgba(255,252,246,0.7), rgba(232,224,210,0.5));
+    background: linear-gradient(150deg, rgba(230,243,255,0.75), rgba(205,228,248,0.55));
     display: flex; align-items: center; justify-content: center; position: relative;
   }
-  .modal-media img { width: 100%; height: 100%; object-fit: contain; padding: 10px; }
+  .modal-media img { width: 100%; height: 100%; object-fit: contain; padding: 4px; }
   .modal-media .ph { font-size: 44px; color: var(--ink-faint); opacity: .5; }
   .modal-info { padding: 22px 24px; position: relative; }
   .modal-close {
@@ -625,9 +704,6 @@ const styles = `
   .modal-title { font-family: 'Familjen Grotesk', sans-serif; font-weight: 600; font-size: 21px; line-height: 1.2; letter-spacing: -0.02em; margin-bottom: 6px; padding-right: 36px; }
   .modal-brand { font-size: 12px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
   .modal-desc { font-size: 13.5px; color: var(--ink-soft); line-height: 1.55; margin-top: 12px; }
-  .cmp-add-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
-  .cmp-add-row .is-added { color: var(--accent-deep); border-color: color-mix(in srgb, var(--accent-deep) 40%, transparent); }
-  .cmp-add-note { margin-top: 8px; font-size: 12.5px; color: #c0584f; font-weight: 600; }
   .meta-row { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
   .meta-item { display: flex; flex-direction: column; gap: 3px; }
   .meta-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); font-weight: 600; }
@@ -640,9 +716,6 @@ const styles = `
   .safety-link:hover { background: rgba(255,255,255,0.72); }
   .safety-arrow { margin-left: auto; color: var(--ink-faint); font-size: 16px; align-self: center; }
   .fn-block { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
-  .prod-note { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--accent-deep) 7%, transparent); border: 1px solid color-mix(in srgb, var(--accent-deep) 16%, transparent); display: flex; flex-direction: column; gap: 4px; }
-  .prod-note-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent-deep); font-weight: 700; }
-  .prod-note-text { font-size: 13px; color: var(--ink-soft); line-height: 1.5; white-space: pre-wrap; }
   .fn-block-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); font-weight: 600; display: block; margin-bottom: 9px; }
   .fn-list { display: flex; flex-wrap: wrap; gap: 8px; }
   .fn-glass-lg {
@@ -808,7 +881,7 @@ const styles = `
   @keyframes silk { 0% { background-position: 130% 0; } 100% { background-position: -60% 0; } }
   .pcard-media {
     aspect-ratio: 3 / 4; position: relative;
-    background: linear-gradient(150deg, rgba(255,252,247,0.6), rgba(236,229,217,0.4));
+    background: linear-gradient(150deg, rgba(225,238,252,0.55), rgba(208,226,244,0.42));
     display: flex; align-items: center; justify-content: center; overflow: hidden;
   }
   .pcard-media img { width: 100%; height: 100%; object-fit: contain; padding: 6px; }
@@ -927,13 +1000,19 @@ const styles = `
     font-family: inherit; font-size: 13px; color: var(--ink); cursor: pointer;
     background: var(--glass); border: 1px solid var(--glass-border); border-radius: 10px; padding: 7px 10px; outline: none;
   }
-  .filter-pills { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 18px; }
+  .filter-pills { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
   .pill {
-    font-size: 12px; font-weight: 600; padding: 6px 13px; border-radius: 20px; cursor: pointer;
-    background: var(--glass); border: 1px solid var(--glass-border); color: var(--ink-soft); transition: all .15s;
+    font-size: 12.5px; font-weight: 600; padding: 8px 15px; border-radius: 11px; cursor: pointer;
+    background: rgba(255,255,255,0.5); border: 1px solid var(--glass-border); color: var(--ink-soft);
+    transition: background .16s, color .16s, border-color .16s, box-shadow .16s; letter-spacing: -0.01em;
   }
-  .pill:hover { background: var(--glass-strong); }
-  .pill.active { background: var(--ink); color: white; border-color: var(--ink); }
+  .pill:hover { background: color-mix(in srgb, var(--accent) 12%, rgba(255,255,255,0.6)); border-color: color-mix(in srgb, var(--accent) 30%, transparent); color: var(--accent-deep); }
+  .pill.active {
+    background: var(--accent-deep); color: #fff; border-color: var(--accent-deep);
+    box-shadow: 0 3px 12px color-mix(in srgb, var(--accent-deep) 35%, transparent);
+  }
+  .pill-sub { font-size: 12px; padding: 6px 13px; border-radius: 9px; }
+  .pill-sub.active { background: color-mix(in srgb, var(--accent-deep) 82%, transparent); }
 
   .admin-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-soft); font-weight: 600; cursor: pointer; user-select: none; }
   .switch { width: 38px; height: 22px; border-radius: 11px; background: rgba(120,135,155,0.3); position: relative; transition: background .2s; flex-shrink: 0; }
@@ -1009,6 +1088,12 @@ const styles = `
   .fn-result-list { display: flex; flex-wrap: wrap; gap: 9px; }
   .cmp-tech { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--ink-faint); }
   .cmp-tech b { color: var(--ink-soft); font-weight: 600; }
+
+  /* Кнопка добавления в сравнение (в карточке средства) */
+  .cmp-add-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .cmp-add-row .is-added { color: var(--accent-deep); border-color: color-mix(in srgb, var(--accent-deep) 40%, transparent); }
+  .cmp-add-note { margin-top: 8px; font-size: 12.5px; color: #c0584f; font-weight: 600; }
+
   /* Матрица сравнения (до 5 средств) */
   .cmp-empty { text-align: center; padding: 40px 16px; }
   .cmp-matrix-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 4px; }
@@ -1031,6 +1116,38 @@ const styles = `
   .cmp-sim-pct { font-weight: 700; font-size: 15px; color: var(--m); }
   .cmp-base-pill { font-size: 11px; font-weight: 600; color: var(--accent-deep); background: color-mix(in srgb, var(--accent-deep) 10%, transparent); padding: 3px 9px; border-radius: 999px; }
   .cmp-note-text { font-size: 12.5px; color: var(--ink-soft); line-height: 1.45; white-space: pre-wrap; }
+
+  /* ─── ЗАГРУЗОЧНЫЙ МАСКОТ (встроенный, на вкладках) ──────────────────────── */
+  .loading-inline {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 60px 20px;
+  }
+  .loading-fullscreen {
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: linear-gradient(168deg, #eef5f3, #e6f1ee 55%, #e0eeea);
+  }
+  .loading-mascot {
+    position: relative; width: 180px;
+    filter: drop-shadow(0 10px 18px rgba(40,30,70,0.2));
+    animation: mascotBob 2.4s ease-in-out infinite;
+  }
+  @keyframes mascotBob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-9px); }
+  }
+  .loading-mascot img { width: 100%; display: block; }
+  .loading-dots { display: flex; gap: 8px; margin-top: 20px; }
+  .loading-dots span {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent); opacity: 0.4;
+    animation: dotPulse 1.2s ease-in-out infinite;
+  }
+  .loading-dots span:nth-child(2) { animation-delay: .2s; }
+  .loading-dots span:nth-child(3) { animation-delay: .4s; }
+  @keyframes dotPulse {
+    0%, 100% { opacity: 0.3; transform: scale(0.8); }
+    50% { opacity: 1; transform: scale(1.15); }
+  }
 
   /* ─── ЭКРАН ВХОДА v3 ───────────────────────────────────────────────── */
   .login3-wrap {
@@ -1186,7 +1303,6 @@ const COMPO_SELECT =
 export default function App() {
   const [authed, setAuthed] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [tab, setTab] = useState("products");
   const [products, setProducts] = useState([]);       // адаптированные (без составов)
   const [ingredients, setIngredients] = useState([]); // справочник (form v6)
@@ -1200,7 +1316,7 @@ export default function App() {
   const [showAddProduct, setShowAddProduct] = useState(false);
   const [showAddIngredient, setShowAddIngredient] = useState(false);
   const [filters, setFilters] = useState({ type: "", fn: "", scalp: "", wash: "", price: "", flags: {} });
-  const [prodSort, setProdSort] = useState("date");   // date | price | name | type | brand
+  const [prodSort, setProdSort] = useState("recommend");   // recommend | date | price | name | type | brand
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [removeBgKey, setRemoveBgKey] = useState("");
   const [showSettings, setShowSettings] = useState(false);
@@ -1227,38 +1343,52 @@ export default function App() {
   const clearCompare = () => { setCompareItems([]); setCompareMsg(""); };
   const goCompare = () => { setDetail(null); setSelected(null); setTab("compare"); };
 
-  useEffect(() => { restoreSession().then(ok => { setAuthed(ok); setIsAdmin(ok && isAdminUser(CURRENT_USER)); setAuthChecked(true); }); }, []);
+  useEffect(() => { restoreSession().then(ok => { setAuthed(ok); setAuthChecked(true); }); }, []);
 
   const loadProducts = useCallback(async () => {
     setLoading(true); setError("");
+    const PAGE = 200;
+    const path = "/products?select=*,notes&order=name.asc";
     try {
-      const data = await sbFetchAll("/products?select=*&order=name.asc");
-      setProducts(data.map(p => adaptProduct(p, null)));
-    } catch (e) { setError("Ошибка загрузки средств: " + e.message); }
-    finally { setLoading(false); }
+      // 1) первая страница — показываем сразу
+      const { rows, total } = await sbFetchFirstPage(path, PAGE);
+      setProducts(rows.map(p => adaptProduct(p, null)));
+      setLoading(false);
+      // 2) остальное — фоном, дополняем список
+      if (total > rows.length) {
+        sbFetchFrom(path, rows.length).then(rest => {
+          if (rest.length) setProducts(prev => [...prev, ...rest.map(p => adaptProduct(p, null))]);
+        }).catch(() => {});
+      }
+    } catch (e) { setError("Ошибка загрузки средств: " + e.message); setLoading(false); }
   }, []);
+
+  const adaptIngredient = (i) => {
+    const gs = i.ingredient_groups || [];
+    const primary = gs.find(g => g.is_primary) || gs[0] || null;
+    return {
+      id: i.id, inci_name: i.inci_name, ru_name: i.ru_name, aliases: i.aliases,
+      description: i.description, is_eu_allergen: !!i.is_eu_allergen,
+      group: primary?.group || null, subgroup: primary?.subgroup || null,
+      subgroup2: primary?.subgroup2 || null, allGroups: gs,
+    };
+  };
 
   const loadIngredients = useCallback(async () => {
     setLoading(true); setError("");
+    const PAGE = 300;
+    const path = "/ingredients?select=id,inci_name,ru_name,aliases,description,is_eu_allergen," +
+      "ingredient_groups(group,subgroup,subgroup2,is_primary)&order=inci_name.asc";
     try {
-      const data = await sbFetchAll(
-        "/ingredients?select=id,inci_name,ru_name,aliases,description,is_eu_allergen," +
-        "ingredient_groups(group,subgroup,subgroup2,is_primary)" +
-        "&order=inci_name.asc"
-      );
-      const withGroup = data.map(i => {
-        const gs = i.ingredient_groups || [];
-        const primary = gs.find(g => g.is_primary) || gs[0] || null;
-        return {
-          id: i.id, inci_name: i.inci_name, ru_name: i.ru_name, aliases: i.aliases,
-          description: i.description, is_eu_allergen: !!i.is_eu_allergen,
-          group: primary?.group || null, subgroup: primary?.subgroup || null,
-          subgroup2: primary?.subgroup2 || null, allGroups: gs,
-        };
-      });
-      setIngredients(withGroup);
-    } catch (e) { setError("Ошибка загрузки ингредиентов: " + e.message); }
-    finally { setLoading(false); }
+      const { rows, total } = await sbFetchFirstPage(path, PAGE);
+      setIngredients(rows.map(adaptIngredient));
+      setLoading(false);
+      if (total > rows.length) {
+        sbFetchFrom(path, rows.length).then(rest => {
+          if (rest.length) setIngredients(prev => [...prev, ...rest.map(adaptIngredient)]);
+        }).catch(() => {});
+      }
+    } catch (e) { setError("Ошибка загрузки ингредиентов: " + e.message); setLoading(false); }
   }, []);
 
   // сохранение правок ингредиента (режим редактора): пишем в БД и обновляем список
@@ -1387,35 +1517,29 @@ export default function App() {
   ];
 
   const opt = useMemo(() => {
-    // канонические виды, сгруппированные по верхнему уровню
-    const byGroup = {};
-    for (const p of products) {
-      if (!p.product_type) continue;
-      const c = canonType(p.product_type);
-      const g = typeGroup(c);
-      (byGroup[g] = byGroup[g] || new Set()).add(c);
-    }
-    const typeTree = GROUP_ORDER
-      .filter(g => byGroup[g] && byGroup[g].size)
-      .map(g => ({ group: g, types: [...byGroup[g]].sort((a, b) => a.localeCompare(b, "ru")) }));
+    const types = [...new Set(products.map(p => p.product_type).filter(Boolean))].sort();
     const washes = [...new Set(products.filter(p => (p.product_type || "").toLowerCase().includes("шампунь")).map(p => p.analytical_type).filter(Boolean))].sort();
     const prices = ["бюджетно", "средняя", "высокая"].filter(t => products.some(p => p.price_tier === t));
-    return { typeTree, washes, prices };
+    return { types, washes, prices };
   }, [products]);
 
   const typeL = (filters.type || "").toLowerCase();
   const isShampooCtx = typeL.includes("шампунь");
   const isMaskCtx = !!typeL.match(/маск|кондиционер/);
-  const showFnFilter = !filters.type || isMaskCtx;
-  const showScalp = !filters.type || isShampooCtx;
-  const showWash = !filters.type || isShampooCtx;
-  const visibleFlags = FLAGS.filter(f => f.id === "curls" ? (!filters.type || isMaskCtx || isShampooCtx) : true);
+  // Доп. фильтры показываем ТОЛЬКО если выбран соответствующий тип
+  const showFnFilter = isMaskCtx;                  // функции — только маска/кондиционер
+  const showScalp = isShampooCtx;                   // тип кожи головы — только шампунь
+  const showWash = isShampooCtx;                    // промывающая способность — только шампунь
+  const visibleFlags = FLAGS.filter(f => {
+    if (f.id === "curls") return isMaskCtx || isShampooCtx;
+    return true; // базовые флаги (без аллергенов, чувств. кожа) — всегда
+  });
 
   const filteredProducts = (() => {
     const list = products.filter(p => {
       const q = search.toLowerCase();
       if (q && !(p.name?.toLowerCase().includes(q) || p.brand?.toLowerCase().includes(q))) return false;
-      if (filters.type && canonType(p.product_type) !== filters.type) return false;
+      if (filters.type && p.product_type !== filters.type) return false;
       if (filters.price && p.price_tier !== filters.price) return false;
       if (filters.wash && p.analytical_type !== filters.wash) return false;
       if (filters.scalp && !scalpKind(p).includes(filters.scalp)) return false;
@@ -1424,8 +1548,24 @@ export default function App() {
       return true;
     });
     const byName = (a, b) => (a.name || "").localeCompare(b.name || "", "ru");
+    const isRecommended = (p) => {
+      const n = (p.notes || "").toLowerCase();
+      return n.includes("рекомендов") || n.includes("супер состав");
+    };
+    const isSafe = (p) => {
+      const cached = compoCache[p.id];
+      if (!cached) return false;
+      return !cached.some(r => r.ing.is_eu_allergen || r.ing.is_avoid);
+    };
     const sorted = [...list];
-    if (prodSort === "price") sorted.sort((a, b) => (a.price_rub ?? Infinity) - (b.price_rub ?? Infinity) || byName(a, b));
+    if (prodSort === "recommend") {
+      sorted.sort((a, b) => {
+        const ra = isRecommended(a) ? 0 : isSafe(a) ? 1 : 2;
+        const rb = isRecommended(b) ? 0 : isSafe(b) ? 1 : 2;
+        if (ra !== rb) return ra - rb;
+        return byName(a, b);
+      });
+    } else if (prodSort === "price") sorted.sort((a, b) => (a.price_rub ?? Infinity) - (b.price_rub ?? Infinity) || byName(a, b));
     else if (prodSort === "name") sorted.sort(byName);
     else if (prodSort === "type") sorted.sort((a, b) => (a.product_type || "я").localeCompare(b.product_type || "я", "ru") || byName(a, b));
     else if (prodSort === "brand") sorted.sort((a, b) => (a.brand || "я").localeCompare(b.brand || "я", "ru") || byName(a, b));
@@ -1447,17 +1587,20 @@ export default function App() {
     return { ...f, type: val, fn: (!val || mk) ? f.fn : "", scalp: (!val || sh) ? f.scalp : "", wash: (!val || sh) ? f.wash : "" };
   });
 
-  if (!authChecked) return (<><style>{styles}</style><div className="loading" style={{ paddingTop: "20vh" }}>Загрузка…</div></>);
-  if (!authed) return (<><style>{styles}</style><LoginScreen onSuccess={() => { setAuthed(true); setIsAdmin(isAdminUser(CURRENT_USER)); }} /></>);
+  const productTypes = opt.types;
+
+  if (!authChecked) return (<><style>{styles}</style><div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(168deg,#eef5f3,#e0eeea)" }}><div className="loading-dots"><span /><span /><span /></div></div></>);
+  if (!authed) return (<><style>{styles}</style><LoginScreen onSuccess={() => setAuthed(true)} /></>);
 
   return (
     <>
       <style>{styles}</style>
       <div className="app">
+        <PetalsBackground />
         <div className="topbar">
           <div className="topbar-aurora" aria-hidden="true" />
           <div className="topbar-veil" aria-hidden="true" />
-          <div className="brand" onClick={() => { setTab("products"); setSearch(""); setSelected(null); setDetail(null); }} style={{ cursor: "pointer" }} title="На главную">
+          <div className="brand">
             <div className="brand-mark">
               <svg width="40" height="44" viewBox="0 0 40 44" fill="none" aria-hidden="true">
                 <defs>
@@ -1487,12 +1630,18 @@ export default function App() {
                   <path d="M15 5 v11 L4 36 a7 7 0 0 0 6 11 h20 a7 7 0 0 0 6 -11 L25 16 V5 z"
                         fill="url(#flask-glass)" stroke="#052e20" strokeWidth="1" strokeLinejoin="round" />
                   <g clipPath="url(#flask-clip)">
-                    <path d="M8 31 H32 V48 H8 Z" fill="url(#flask-liquid)" opacity="0.95" />
-                    <ellipse cx="20" cy="31" rx="12" ry="2.4" fill="#8fe9c4" opacity="0.7" />
-                    <circle className="flask-bub"    cx="15" cy="42" r="1.5" fill="rgba(255,255,255,0.85)" />
-                    <circle className="flask-bub b2" cx="22" cy="44" r="1.1" fill="rgba(255,255,255,0.75)" />
-                    <circle className="flask-bub b3" cx="18" cy="43" r="1.3" fill="rgba(255,255,255,0.8)" />
-                    <circle className="flask-bub b4" cx="25" cy="45" r="0.9" fill="rgba(255,255,255,0.7)" />
+                    {/* жидкость по форме нижней части колбы */}
+                    <path d="M7 33 Q5 37 4 40 a7 7 0 0 0 6 7 h20 a7 7 0 0 0 6 -7 Q35 37 33 33 Z"
+                          fill="url(#flask-liquid)" opacity="0.95" />
+                    {/* поверхность жидкости — слегка волнистая */}
+                    <path d="M7 33 Q13 30 20 33 Q27 36 33 33" stroke="#8fe9c4" strokeWidth="1.5" fill="none" opacity="0.8" />
+                    {/* пузырьки — больше и оживлённее */}
+                    <circle className="flask-bub"    cx="13" cy="41" r="1.6" fill="rgba(255,255,255,0.88)" />
+                    <circle className="flask-bub b2" cx="21" cy="43" r="1.1" fill="rgba(255,255,255,0.78)" />
+                    <circle className="flask-bub b3" cx="17" cy="42" r="1.4" fill="rgba(255,255,255,0.82)" />
+                    <circle className="flask-bub b4" cx="26" cy="44" r="0.9" fill="rgba(255,255,255,0.72)" />
+                    <circle className="flask-bub"    cx="19" cy="45" r="1.2" fill="rgba(255,255,255,0.75)" style={{ animationDelay: "0.9s" }} />
+                    <circle className="flask-bub b2" cx="24" cy="40" r="0.8" fill="rgba(255,255,255,0.65)" style={{ animationDelay: "1.4s" }} />
                   </g>
                   <path d="M15 5 v11 L4 36 a7 7 0 0 0 6 11 h20 a7 7 0 0 0 6 -11 L25 16 V5 z" fill="url(#flask-sheen)" />
                   <g clipPath="url(#flask-clip)">
@@ -1507,19 +1656,17 @@ export default function App() {
             <div className="brand-text"><strong>beauty helper</strong><span>косметическая база · анализ составов</span></div>
           </div>
           <div className="topbar-actions">
-            {isAdmin && (
-              <button className={`btn btn-sm ${editorMode ? "btn-primary" : "btn-glass"}`} onClick={() => setEditorMode(m => !m)}>
-                {editorMode ? "✓ Режим редактора" : "Режим редактора"}
-              </button>
-            )}
-            {isAdmin && editorMode && tab === "products" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddProduct(true)}>Добавить средство</button>}
-            {isAdmin && editorMode && tab === "ingredients" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddIngredient(true)}>Добавить ингредиент</button>}
-            {isAdmin && <button className="btn btn-glass btn-sm" onClick={() => setShowSettings(s => !s)} title="Настройки">⚙</button>}
-            <button className="btn btn-glass btn-sm" onClick={() => { signOut(); setAuthed(false); setIsAdmin(false); setEditorMode(false); }}>Выйти</button>
+            <button className={`btn btn-sm ${editorMode ? "btn-primary" : "btn-glass"}`} onClick={() => setEditorMode(m => !m)}>
+              {editorMode ? "✓ Режим редактора" : "Режим редактора"}
+            </button>
+            {editorMode && tab === "products" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddProduct(true)}>+ Средство</button>}
+            {editorMode && tab === "ingredients" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddIngredient(true)}>+ Ингредиент</button>}
+            <button className="btn btn-glass btn-sm" onClick={() => setShowSettings(s => !s)} title="Настройки">⚙</button>
+            <button className="btn btn-glass btn-sm" onClick={() => { signOut(); setAuthed(false); }}>Выйти</button>
           </div>
         </div>
 
-        {isAdmin && showSettings && (
+        {showSettings && (
           <div style={{ background: "rgba(20,40,32,0.9)", padding: "12px 2rem", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12, color: "#cbd8cf", flexShrink: 0 }}>API-ключ remove.bg:</span>
             <input type="password" value={removeBgKey} onChange={e => setRemoveBgKey(e.target.value)}
@@ -1557,14 +1704,7 @@ export default function App() {
                 <div className="filter-panel">
                   <div className="filter-field">
                     <label>Вид средства</label>
-                    <select value={filters.type} onChange={e => setType(e.target.value)}>
-                      <option value="">Все виды</option>
-                      {opt.typeTree.map(grp => (
-                        <optgroup key={grp.group} label={grp.group}>
-                          {grp.types.map(t => <option key={t} value={t}>{t}</option>)}
-                        </optgroup>
-                      ))}
-                    </select>
+                    <HierType value={filters.type} onChange={setType} types={opt.types} />
                   </div>
                   {showFnFilter && (
                     <div className="filter-field">
@@ -1633,6 +1773,7 @@ export default function App() {
                 <div className="section-title">Косметические средства</div>
                 <div className="ing-head-right">
                   <select className="sim-select ing-sort" value={prodSort} onChange={e => setProdSort(e.target.value)}>
+                    <option value="recommend">Рекомендации</option>
                     <option value="date">По дате добавления</option>
                     <option value="price">По цене</option>
                     <option value="name">По названию</option>
@@ -1642,7 +1783,7 @@ export default function App() {
                   <div className="count">{filteredProducts.length} позиций</div>
                 </div>
               </div>
-              {loading ? <div className="loading">Загрузка…</div>
+              {loading ? <LoadingMascot />
                 : filteredProducts.length === 0 ? (
                   <div className="empty-state">
                     <span className="empty-ic">◇</span>
@@ -1655,7 +1796,16 @@ export default function App() {
                       <div key={p.id} className="card" onClick={() => openProduct(p)}>
                         <div className="card-media">
                           {p.product_type && <span className="card-type">{p.product_type}</span>}
-                          {p.image_url ? <img src={p.image_url} alt={p.brand || ""} /> : <span className="ph">◇</span>}
+                          {p.image_url
+                            ? <img src={p.image_url} alt={p.brand || ""} />
+                            : <div className="pt-ph" style={{ width: "70%", height: "82%", "--tint": typeTint(p.product_type) }} aria-hidden="true">
+                                <svg viewBox="0 0 40 48" width="100%" height="100%">
+                                  <rect x="13" y="2" width="14" height="6" rx="2" fill="var(--tint)" opacity="0.85" />
+                                  <rect x="8" y="8" width="24" height="38" rx="7" fill="var(--tint)" opacity="0.16" stroke="var(--tint)" strokeOpacity="0.35" strokeWidth="1" />
+                                  <text x="20" y="32" textAnchor="middle" fontFamily="Familjen Grotesk, sans-serif" fontWeight="600" fontSize="16" fill="var(--tint)">{brandInitial(p)}</text>
+                                </svg>
+                              </div>
+                          }
                         </div>
                         <div className="card-body">
                           {p.name && <div className="card-name">{p.name}</div>}
@@ -1675,7 +1825,7 @@ export default function App() {
 
           {tab === "ingredients" && (
             <IngredientsTab data={ingredients} loading={loading} onOpenDetail={setDetail}
-              editorMode={editorMode && isAdmin} onSaveIngredient={saveIngredientField} />
+              editorMode={editorMode} onSaveIngredient={saveIngredientField} />
           )}
           {tab === "similar" && (
             <AnalogTab allProducts={products} allIngredients={ingredients}
@@ -1691,7 +1841,7 @@ export default function App() {
 
         {selected && (
           <ProductModal product={selected} subgroupDesc={subgroupDesc}
-            removeBgKey={removeBgKey} editorMode={editorMode && isAdmin}
+            removeBgKey={removeBgKey} editorMode={editorMode}
             onClose={() => setSelected(null)}
             onOpenDetail={setDetail}
             onOpenProduct={openProduct}
@@ -1761,6 +1911,79 @@ function ProductThumb({ product, size = 56 }) {
   );
 }
 
+// ─── ИЕРАРХИЧЕСКИЙ ФИЛЬТР ВИДА СРЕДСТВА (раскрытие при наведении) ─────────────
+// минималистичные иконки одного стиля (line icons, 18×18, stroke currentColor)
+const HIER_ICONS = {
+  "Волосы": <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M5 4c0 6 1 10 2 16M12 3c0 7 0 11-1 17M19 4c0 6-1 10-2 16" /></svg>,
+  "Лицо и тело": <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M9 10h.01M15 10h.01M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8" /></svg>,
+  "Укладка": <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3h7l-1 6 4 1-7 11 1-8-4-1z" /></svg>,
+  "Прочее": <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" /></svg>,
+};
+const TYPE_HIER = [
+  { label: "Волосы", keywords: ["шампунь","маска","кондиционер","масло","несмываемое","ко-вошинг","хелатное","несмываемый","спрей","бальзам для волос","флюид"] },
+  { label: "Лицо и тело", keywords: ["крем","сыворотка","тонер","гель","лосьон","молочко","мицеллярная","пенка","скраб","пилинг","пудра","салфетки","очищение","макияж","spf","эссенция","уход за губами","бальзам для губ","эмульсия","маска для лица","ампула","бальзам"] },
+  { label: "Укладка", keywords: ["укладка","текстурайзер","стайлинг"] },
+];
+function HierType({ value, onChange, types = [] }) {
+  const [open, setOpen] = useState(false);
+  const [hovered, setHovered] = useState(null);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    const onDoc = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  // распределяем типы по категориям
+  const used = new Set();
+  const groups = TYPE_HIER.map(g => {
+    const items = types.filter(t => {
+      const tl = t.toLowerCase();
+      return g.keywords.some(k => tl.includes(k)) && !used.has(t);
+    });
+    items.forEach(t => used.add(t));
+    return { label: g.label, items };
+  }).filter(g => g.items.length);
+  const rest = types.filter(t => !used.has(t));
+  if (rest.length) groups.push({ label: "Прочее", items: rest });
+
+  const pick = (val) => { onChange(val); setOpen(false); setHovered(null); };
+
+  return (
+    <div className="hier-type" ref={wrapRef}>
+      <button type="button" className="hier-trigger" onClick={() => setOpen(o => !o)}>
+        <span>{value || "Все виды"}</span>
+        <span className="hier-caret">{open ? "▴" : "▾"}</span>
+      </button>
+      {open && (
+        <div className="hier-menu">
+          <div className={`hier-root ${!value ? "active" : ""}`} onClick={() => pick("")}>Все виды</div>
+          {groups.map(g => (
+            <div key={g.label} className="hier-group"
+              onMouseEnter={() => setHovered(g.label)} onMouseLeave={() => setHovered(null)}>
+              <div className="hier-group-head">
+                <span className="hier-group-name">
+                  <span className="hier-ic">{HIER_ICONS[g.label]}</span>
+                  {g.label}
+                </span>
+                <span className="hier-arrow">›</span>
+              </div>
+              {hovered === g.label && (
+                <div className="hier-sub">
+                  {g.items.map(t => (
+                    <div key={t} className={`hier-item ${value === t ? "active" : ""}`} onClick={() => pick(t)}>{t}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // плиточная мини-карточка средства: вертикальное превью + название (как на витрине, но компактнее)
 function ProductMiniCard({ product, score, onClick }) {
   const matchColor = score >= 70 ? "#1f7a5c" : score >= 45 ? "#c98a3a" : "#8b8f86";
@@ -1791,7 +2014,9 @@ function ProductMiniCard({ product, score, onClick }) {
 // detail формы:
 //   { kind:'ingredient', inci, ru, description, is_eu_allergen, groups:[{group,subgroup,subgroup2}] }
 //   { kind:'group', group, subgroup?, subgroup2? }
-function DetailModal({ detail, onNavigate, onOpenProduct, onClose, subgroupDesc, allProducts = [], allIngredients = [], compoCache = {} }) {
+function DetailModal({ detail, onNavigate, onOpenProduct, onClose, onAddToCompare, onGoCompare, subgroupDesc, allProducts = [], allIngredients = [], compoCache = {} }) {
+  const [addedToCompare, setAddedToCompare] = useState(false);
+  useEffect(() => { setAddedToCompare(false); }, [detail.kind, detail.inci, detail.group, detail.subgroup]);
 
   // продукты с загруженным составом (только по ним можно искать вхождение ингредиента/группы)
   const loadedProducts = allProducts
@@ -1833,6 +2058,18 @@ function DetailModal({ detail, onNavigate, onOpenProduct, onClose, subgroupDesc,
         </div>
         {detail.description && <p className="dm-desc">{detail.description}</p>}
         {!detail.description && <p className="dm-desc dm-muted">Описание пока готовится.</p>}
+
+        {(onAddToCompare || onGoCompare) && (
+          <div className="dm-cmp-actions">
+            {onAddToCompare && (
+              <button className={`btn btn-glass btn-sm ${addedToCompare ? "is-added" : ""}`}
+                onClick={() => { onAddToCompare(detail.inci); setAddedToCompare(true); }} disabled={addedToCompare}>
+                {addedToCompare ? "✓ В сравнении" : "＋ Добавить в сравнение"}
+              </button>
+            )}
+            {onGoCompare && <button className="btn btn-primary btn-sm" onClick={onGoCompare}>Перейти к сравнению →</button>}
+          </div>
+        )}
 
         <div className="dm-section">
           <span className="dm-label">Группы и подгруппы</span>
@@ -1929,6 +2166,28 @@ function DetailModal({ detail, onNavigate, onOpenProduct, onClose, subgroupDesc,
   );
 }
 
+// краткая авто-сводка о средстве на основе состава: ключевые функции + флаги безопасности
+function compositionSummary(product) {
+  const rows = product.ingredients || [];
+  if (!rows.length) return null;
+  const list = rows.map(r => ({ inci: r.ing.inci_name, group: r.ing.group, position: r.position }));
+  const fns = functionsFromList(list).map(f => f.text);
+  const allergens = rows.filter(r => r.ing.is_eu_allergen).length;
+  const total = rows.length;
+  // активная часть до первой отдушки
+  const fragIdx = list.findIndex(x => (x.group || "").toLowerCase().includes("отдушк"));
+  const activeCount = fragIdx > 0 ? fragIdx : total;
+
+  const parts = [];
+  if (fns.length) {
+    const f = fns.slice(0, 3).map(s => s.toLowerCase());
+    parts.push(`Работает на ${f.join(", ")}`);
+  }
+  parts.push(`${total} ингредиент${total % 10 === 1 && total % 100 !== 11 ? "" : total % 10 >= 2 && total % 10 <= 4 && (total % 100 < 10 || total % 100 >= 20) ? "а" : "ов"}, из них ~${activeCount} в активной части`);
+  parts.push(allergens === 0 ? "аллергенов EU не обнаружено" : `${allergens} потенциальн${allergens === 1 ? "ый аллерген" : "ых аллергена(ов)"} EU`);
+  return { text: parts.join(" · "), fns, allergens };
+}
+
 function ProductModal({ product, onClose, onOpenDetail, onOpenProduct, subgroupDesc, allProducts = [], compoCache = {}, loadAllCompositions, onImageSaved, onDelete, removeBgKey, editorMode = false, inCompare = false, compareCount = 0, compareMax = 5, onAddToCompare, onGoCompare }) {
   const [editingImage, setEditingImage] = useState(false);
   // подстраховка: если фоновая загрузка составов ещё не прошла, дотягиваем здесь,
@@ -1963,19 +2222,34 @@ function ProductModal({ product, onClose, onOpenDetail, onOpenProduct, subgroupD
     : score >= 65
     ? { label: "Средняя безопасность", note: `${allergens} аллерген(ов) в составе`, color: "#c98a3a" }
     : { label: "Пониженная безопасность", note: `${allergens} аллерген(ов) в составе`, color: "#c0584f" };
-  // похожие по составу — только среди средств с уже загруженным составом (кэш)
-  const loadedProducts = allProducts.filter(p => compoCache[p.id] && p.id !== product.id)
-    .map(p => ({ ...p, ingredients: compoCache[p.id], price_tier: product.price_tier }));
-  const similar = loadedProducts.length
-    ? findSimilar(toCompList(product), product, loadedProducts, { sameType: true }).slice(0, 4)
-    : [];
+  const matched = product.ingredients.filter(r => r.matched).length;
+
+  // похожие по составу — из всех загруженных в кэш (строго кроме текущего)
+  const similar = useMemo(() => {
+    const sourceList = toCompList(product);
+    if (!sourceList.length) return [];
+    const candidates = allProducts
+      .filter(p => p.id !== product.id && compoCache[p.id])
+      .map(p => ({ ...p, ingredients: compoCache[p.id] }));
+    if (!candidates.length) return [];
+    return findSimilar(sourceList, product, candidates, { sameType: true }).slice(0, 4);
+  }, [product.id, allProducts, compoCache]);
 
   return (
     <div className="overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <div className="modal-head">
           <div className="modal-media">
-            {product.image_url ? <img src={product.image_url} alt={product.name} /> : <span className="ph">◇</span>}
+            {product.image_url
+              ? <img src={product.image_url} alt={product.name} />
+              : <div className="pt-ph" style={{ width: "58%", height: "72%", "--tint": typeTint(product.product_type) }} aria-hidden="true">
+                  <svg viewBox="0 0 40 48" width="100%" height="100%">
+                    <rect x="13" y="2" width="14" height="6" rx="2" fill="var(--tint)" opacity="0.85" />
+                    <rect x="8" y="8" width="24" height="38" rx="7" fill="var(--tint)" opacity="0.16" stroke="var(--tint)" strokeOpacity="0.35" strokeWidth="1" />
+                    <text x="20" y="32" textAnchor="middle" fontFamily="Familjen Grotesk, sans-serif" fontWeight="600" fontSize="16" fill="var(--tint)">{brandInitial(product)}</text>
+                  </svg>
+                </div>
+            }
           </div>
           <div className="modal-info">
             <button className="modal-close" onClick={onClose}>✕</button>
@@ -1998,12 +2272,6 @@ function ProductModal({ product, onClose, onOpenDetail, onOpenProduct, subgroupD
                 </div>
               </div>
             )}
-            {product.notes && String(product.notes).trim() && (
-              <div className="prod-note">
-                <span className="prod-note-label">Заметка</span>
-                <span className="prod-note-text">{String(product.notes).trim()}</span>
-              </div>
-            )}
             <div className="safety safety-link" onClick={() => goInfo("Степень безопасности", safety.label, "Как мы считаем степень безопасности и что влияет на оценку")}>
               <div className="safety-ring" style={{ background: safety.color }}>{score}</div>
               <div className="safety-txt">
@@ -2012,7 +2280,21 @@ function ProductModal({ product, onClose, onOpenDetail, onOpenProduct, subgroupD
               </div>
               <span className="safety-arrow">→</span>
             </div>
-            {product.short_desc && <div className="modal-desc">{product.short_desc}</div>}
+            {(() => {
+              const summary = compositionSummary(product);
+              const n = (product.notes || "").toLowerCase();
+              const badge =
+                n.includes("супер состав") ? { icon: "🏆", label: "Супер состав", cls: "badge-gold" }
+                : (n.includes("рекомендовано") || n.includes("рекомендован")) ? { icon: "⭐", label: "Рекомендовано", cls: "badge-star" }
+                : null;
+              if (!summary && !badge) return null;
+              return (
+                <div className="summary-block">
+                  {badge && <span className={`notes-badge ${badge.cls}`}>{badge.icon} {badge.label}</span>}
+                  {summary && <p className="summary-text">{summary.text}</p>}
+                </div>
+              );
+            })()}
             <div className="cmp-add-row">
               <button className={`btn btn-sm ${inCompare ? "btn-glass is-added" : "btn-glass"}`}
                 onClick={onAddToCompare} disabled={inCompare || compareCount >= compareMax}>
@@ -2046,7 +2328,7 @@ function ProductModal({ product, onClose, onOpenDetail, onOpenProduct, subgroupD
         </div>
 
         <div className="compo">
-          <div className="compo-head">Состав, {product.ingredients.length} ингредиентов</div>
+          <div className="compo-head">Состав, {product.ingredients.length} ингредиентов <span>· распознано {matched}</span></div>
           <div className="ing-list">
             <div className="ing-grid">
               <div className="ing-colhead" />
@@ -2055,12 +2337,9 @@ function ProductModal({ product, onClose, onOpenDetail, onOpenProduct, subgroupD
               <div className="ing-colhead">Подгруппа · описание</div>
             </div>
             {(() => {
-              // убираем пустые строки и строки-прочерки («-», «—», «–», пусто)
-              const isBlank = (v) => { const s = (v == null ? "" : String(v)).trim(); return s === "" || s === "-" || s === "—" || s === "–"; };
-              const rows = product.ingredients.filter(r => !(isBlank(r.ing.inci_name) && isBlank(r.ing.ru_name)));
-              const fragranceIdx = rows.findIndex(r => r.ing.group === "Отдушки");
+              const fragranceIdx = product.ingredients.findIndex(r => r.ing.group === "Отдушки");
               const hasBoundary = fragranceIdx > -1 && !product.is_face;
-              return rows.map((row, i) => {
+              return product.ingredients.map((row, i) => {
                 const ing = row.ing;
                 const minor = hasBoundary && i > fragranceIdx;
                 const showDivider = hasBoundary && i === fragranceIdx + 1;
@@ -2083,12 +2362,13 @@ function ProductModal({ product, onClose, onOpenDetail, onOpenProduct, subgroupD
                       <div className="ing-cell ing-cell-sep">
                         {ing.group
                           ? <span className="g-tag" style={{ background: groupColor(ing.group) + "1f", color: groupColor(ing.group) }} onClick={() => goGroup(ing.group)}>{ing.group}</span>
-                          : null}
+                          : <span style={{ color: "var(--ink-faint)" }}>–</span>}
                       </div>
                       <div className="ing-cell ing-cell-sep">
                         {ing.subgroup && <div className="ing-sub"><span className="lbl">Подгруппа</span><span className="sub-link" onClick={() => goSubgroup(ing.group, ing.subgroup)}>{ing.subgroup}</span></div>}
                         {(ing.description || descFor(subgroupDesc, ing.group, ing.subgroup, ing.subgroup2)) && <div className="ing-desc" style={{ marginTop: ing.subgroup ? 5 : 0 }}>{ing.description || descFor(subgroupDesc, ing.group, ing.subgroup, ing.subgroup2)}</div>}
                         {ing.oil && <div className="ing-oil">Комедогенность {ing.oil.comedogenicity} · проникновение {ing.oil.penetration}</div>}
+                        {!ing.subgroup && !ing.description && !ing.oil && !descFor(subgroupDesc, ing.group, ing.subgroup, ing.subgroup2) && <span style={{ color: "var(--ink-faint)", fontSize: 12 }}>–</span>}
                       </div>
                     </div>
                   </div>
@@ -2322,7 +2602,7 @@ function AnalogTab({ onOpenProduct, allProducts = [], allIngredients = [], loadA
   );
 }
 
-// ─── ВКЛАДКА «СРАВНЕНИЕ» — до 5 средств: функции, состав, безопасность, цена, заметки ──
+// ─── ВКЛАДКА «СРАВНЕНИЕ СОСТАВОВ» — прямое сравнение двух конкретных средств ──
 function CompareTab({ onOpenProduct, items = [], onRemove, onClear, allProducts = [], allIngredients = [], loadComposition, compoCache = {} }) {
   // дотягиваем составы выбранных средств, если их ещё нет в кэше
   useEffect(() => {
@@ -2474,6 +2754,7 @@ function CompareTab({ onOpenProduct, items = [], onRemove, onClear, allProducts 
 }
 
 
+
 // ─── Сортировка: активные/лучшие группы — первыми, затем остальные ───────────
 // Приоритет активных групп (по файлу приоритета). Конкретный список «лучших»
 // отдельных ингредиентов вставляется в ACTIVE_INCI, когда будет предоставлен.
@@ -2545,7 +2826,11 @@ function IngredientsTab({ data = [], loading, onOpenDetail, editorMode = false, 
     if (sortBy === "alpha") rows = [...rows].sort(byName);
     else if (sortBy === "alpha-desc") rows = [...rows].sort((a, b) => byName(b, a));
     else if (sortBy === "group") rows = [...rows].sort((a, b) => (a.group || "я").localeCompare(b.group || "я", "ru") || byName(a, b));
-    else rows = [...rows].sort((a, b) => activeRank(a) - activeRank(b) || byName(a, b)); // active
+    else rows = [...rows].sort((a, b) => {
+      // «Лучшие»: интересные/активные с заполненным описанием — выше
+      const hasDesc = (x) => x.description && String(x.description).trim().length > 0 ? 0 : 1;
+      return hasDesc(a) - hasDesc(b) || activeRank(a) - activeRank(b) || byName(a, b);
+    });
     return rows;
   }, [data, search, filterGroup, filterSub, onlyProblems, sortBy]);
 
@@ -2612,9 +2897,9 @@ function IngredientsTab({ data = [], loading, onOpenDetail, editorMode = false, 
       {filterGroup && tree.find(t => t.group === filterGroup && t.subs.length > 0) && (
         <div className="filter-pills" style={{ marginTop: -6, paddingLeft: 14 }}>
           <span style={{ color: "var(--ink-faint)", fontSize: 12, alignSelf: "center", marginRight: 4 }}>↳ подгруппы:</span>
-          <span className={`pill ${!filterSub ? "active" : ""}`} onClick={() => { setFilterSub(""); setPage(1); }}>Все</span>
+          <span className={`pill pill-sub ${!filterSub ? "active" : ""}`} onClick={() => { setFilterSub(""); setPage(1); }}>Все</span>
           {tree.find(t => t.group === filterGroup).subs.map(s =>
-            <span key={s} className={`pill ${filterSub === s ? "active" : ""}`} onClick={() => { setFilterSub(s); setPage(1); }}>{s}</span>)}
+            <span key={s} className={`pill pill-sub ${filterSub === s ? "active" : ""}`} onClick={() => { setFilterSub(s); setPage(1); }}>{s}</span>)}
         </div>
       )}
 
@@ -2622,7 +2907,7 @@ function IngredientsTab({ data = [], loading, onOpenDetail, editorMode = false, 
         <div className="section-title">Ингредиенты</div>
         <div className="ing-head-right">
           <select className="sim-select ing-sort" value={sortBy} onChange={e => { setSortBy(e.target.value); setPage(1); }}>
-            <option value="active">По активности</option>
+            <option value="active">Лучшие</option>
             <option value="alpha">По названию (А–Я)</option>
             <option value="alpha-desc">По названию (Я–А)</option>
             <option value="group">По группам</option>
@@ -2631,7 +2916,7 @@ function IngredientsTab({ data = [], loading, onOpenDetail, editorMode = false, 
         </div>
       </div>
 
-      {loading ? <div className="loading">Загрузка…</div> : (
+      {loading ? <LoadingMascot /> : (
         <div className="table-wrap">
           <table>
             <thead>
@@ -3171,6 +3456,89 @@ function AddIngredientModal({ onClose, onSaved }) {
           <button className="btn btn-ghost" onClick={onClose}>Отмена</button>
           <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? "Сохранение..." : "Сохранить"}</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ПАДАЮЩИЕ ЦВЕТОЧКИ ────────────────────────────────────────────────────────
+const PETAL_COLORS = ["#ffb7c5","#ffc8d4","#ff9eb5","#ffd6e0","rgba(255,182,206,0.6)","rgba(255,255,255,0.5)","#f7c5d5"];
+const PETAL_COUNT = 22;
+function PetalsSVG({ color, size }) {
+  // цветочек в стиле Bikini Bottom — 5 округлых лепестков
+  return (
+    <svg width={size} height={size} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <ellipse cx="20" cy="8"  rx="6" ry="9"  fill={color} transform="rotate(0 20 20)" />
+      <ellipse cx="20" cy="8"  rx="6" ry="9"  fill={color} transform="rotate(72 20 20)" />
+      <ellipse cx="20" cy="8"  rx="6" ry="9"  fill={color} transform="rotate(144 20 20)" />
+      <ellipse cx="20" cy="8"  rx="6" ry="9"  fill={color} transform="rotate(216 20 20)" />
+      <ellipse cx="20" cy="8"  rx="6" ry="9"  fill={color} transform="rotate(288 20 20)" />
+      <circle cx="20" cy="20" r="5" fill="rgba(255,255,200,0.85)" />
+    </svg>
+  );
+}
+const PETALS = Array.from({ length: PETAL_COUNT }, (_, i) => ({
+  id: i,
+  left: `${(i * 4.5 + Math.random() * 4) % 100}%`,
+  size: 14 + Math.floor(i * 1.3 % 18),
+  duration: `${7 + (i * 1.7 % 9)}s`,
+  delay: `${-(i * 0.8 % 12)}s`,
+  color: PETAL_COLORS[i % PETAL_COLORS.length],
+  drift: `${-30 + (i * 17 % 60)}px`,
+}));
+function PetalsBackground() {
+  return (
+    <div className="petals-canvas" aria-hidden="true">
+      {PETALS.map(p => (
+        <div key={p.id} className="petal" style={{
+          left: p.left,
+          animationDuration: p.duration,
+          animationDelay: p.delay,
+        }}>
+          <PetalsSVG color={p.color} size={p.size} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── ЗАГРУЗОЧНЫЙ ЭКРАН С МАСКОТОМ ────────────────────────────────────────────
+function LoadingMascot() {
+  const [pupil, setPupil] = useState({ x: 0, y: 0 });
+  const faceRef = useRef(null);
+
+  useEffect(() => {
+    const onMove = (e) => {
+      const el = faceRef.current; if (!el) return;
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const clamp = (v) => Math.max(-1, Math.min(1, v));
+      setPupil({ x: clamp((e.clientX - cx) / (window.innerWidth / 2)),
+                 y: clamp((e.clientY - cy) / (window.innerHeight / 2)) });
+    };
+    window.addEventListener("mousemove", onMove);
+    return () => window.removeEventListener("mousemove", onMove);
+  }, []);
+
+  const EYE = { lx: 43.5, ly: 47.5, rx: 58.8, ry: 46.6 };
+  const TRAVEL = 4;
+  const tx = pupil.x * TRAVEL, ty = pupil.y * TRAVEL;
+  const Eye = ({ leftPct, topPct }) => (
+    <span className="me-eye" style={{ left: `${leftPct}%`, top: `${topPct}%` }}>
+      <span className="me-patch" />
+      <span className="me-pupil" style={{ transform: `translate(${tx}px, ${ty}px)` }} />
+    </span>
+  );
+
+  return (
+    <div className="loading-inline">
+      <div className="loading-mascot" ref={faceRef}>
+        <img src={mascot} alt="" draggable="false" />
+        <Eye leftPct={EYE.lx} topPct={EYE.ly} />
+        <Eye leftPct={EYE.rx} topPct={EYE.ry} />
+      </div>
+      <div className="loading-dots">
+        <span /><span /><span />
       </div>
     </div>
   );
