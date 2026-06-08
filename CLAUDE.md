@@ -1,50 +1,118 @@
-# CLAUDE.md
+# Beauty Helper — навигация по проекту
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Этот документ — карта проекта. Читай его в начале каждой сессии.
 
-## Commands
+## Что это за проект
 
-```bash
-npm run dev        # start dev server (Vite HMR)
-npm run build      # production build → dist/
-npm run preview    # preview the production build locally
-npm run lint       # ESLint
-npm run deploy     # build + push dist/ to gh-pages branch
+**Beauty Helper** — публичный инструмент, который помогает людям осознанно выбирать косметику: расшифровать состав на русском, понять что к чему, и собрать схему домашнего ухода за волосами и лицом, которая реально даёт результат.
+
+**Миссия:** помочь каждому разобраться в составе и собрать уход, который работает — без химического образования и дорогих консультаций.
+
+Подробности — в `.business/INDEX.md`.
+
+## Текущий статус (июнь 2026)
+
+**Что работает в MVP:**
+- Каталог продуктов + INCI-справочник с расшифровкой на русском
+- Поиск по продуктам и ингредиентам
+- Сравнение до 5 средств
+- Добавление продукта через вставку состава (INCI-парсинг + fuzzy-match)
+- Загрузка фото (resize 1200×1200 WebP → опц. remove.bg → Supabase Storage)
+- Админ-панель для управления данными
+
+**Приоритеты Q2–Q3 2026** (подробнее — `.business/products/product-1.md`):
+1. Подбор схемы ухода под параметры пользователя
+2. Качество данных (описания ингредиентов, устранение null-записей)
+3. Первые реальные пользователи, сбор отзывов
+4. Запуск монетизации: freemium (база бесплатно, схема ухода — платно)
+
+## Структура репозитория
+
+```
+src/
+  App.jsx          # весь UI и логика (единственный активный файл)
+  main.jsx         # точка входа
+  index.css        # базовые стили
+public/            # статика
+.business/         # бизнес-контекст, цели, история решений
+  INDEX.md         # главный документ о продукте
+  company/         # о проекте, команде, ценностях
+  products/        # функции, roadmap, монетизация
+  audience/        # аватар, сегменты, возражения
+  goals/           # годовые, квартальные, месячные цели и KPI
+  economics/       # прогноз, расходы, выручка
+  marketing/       # каналы, воронка, конкуренты
+  assets/          # бренд-гайдлайны
+  история/         # рефлексии по сессиям (YYYY-MM-DD-название.md)
+plans/             # технические планы по функциям
+dist/              # артефакты сборки (не редактировать)
 ```
 
-There is no test suite.
+> `cosmetics-app.jsx` в корне — устаревшая версия, не трогать.
 
-## Architecture
+## Стек
 
-Single-page React 19 app with no routing. The entire UI lives in **`src/App.jsx`** — one large file containing:
-- All CSS injected as a template literal (`styles`) via `<style>` in JSX
-- `sbFetch()` — thin wrapper around the Supabase REST API
-- `App` — root component managing tab state (Products / INCI Reference)
-- `ProductModal` — read-only product detail with ordered ingredient list
-- `AddProductModal` — create product with INCI paste-and-parse flow
-- `AddIngredientModal` — create ingredient entry
-- `ImagePicker` — image upload component (URL or file → resize → optional remove.bg → Supabase Storage)
+| Слой | Технология |
+|---|---|
+| Фреймворк | React 19 (Vite, без роутера) |
+| Язык | JavaScript (JSX) |
+| Стили | CSS-in-JS — строка `styles` в `App.jsx`, CSS custom properties в `:root` |
+| Шрифты | Playfair Display (заголовки), DM Sans (текст) — Google Fonts |
+| База данных | Supabase (REST API через `sbFetch()`) |
+| Хранилище | Supabase Storage, бакет `product-images` (публичный) |
+| Деплой | GitHub Pages, ветка `gh-pages`, base `/Cosmetic_db/` |
 
-`cosmetics-app.jsx` in the repo root is a legacy standalone single-file version; the active code is `src/App.jsx`.
+## База данных
 
-## Backend: Supabase
-
-The Supabase project URL and anon key are hardcoded in `src/App.jsx`. The database has three tables:
-
-| Table | Key columns |
+| Таблица | Ключевые поля |
 |---|---|
 | `products` | id, name, brand, image_url, created_at |
 | `ingredients` | id, inci_name, ru_name, grp, subgroup, description, source_sheet |
 | `product_ingredients` | id, product_id, ingredient_id, position, raw_inci_name |
 
-`product_ingredients` is the many-to-many join with an ordered `position` column. When adding a product, each parsed INCI name is fuzzy-matched against the `ingredients` table; unmatched entries are saved with `ingredient_id = null` and their raw text in `raw_inci_name`.
+При добавлении продукта каждое INCI-имя fuzzy-матчится по таблице `ingredients`. Несовпавшие сохраняются с `ingredient_id = null` и текстом в `raw_inci_name`.
 
-Images are stored in a Supabase Storage bucket named `product-images` (must be public). All images are resized to 1200×1200 WebP via the Canvas API before upload. The optional remove.bg integration strips backgrounds before upload; the API key is entered at runtime via the ⚙ settings panel and never persisted.
+## Команды
 
-## Deployment
+```bash
+npm run dev        # dev-сервер (Vite HMR)
+npm run build      # сборка → dist/
+npm run preview    # превью prod-сборки
+npm run lint       # ESLint
+npm run deploy     # build + push dist/ в ветку gh-pages
+```
 
-The app is deployed to GitHub Pages at `https://simonakhatipova.github.io/Cosmetic_db/`. The Vite `base` is set to `/Cosmetic_db/` in `vite.config.js`. `npm run deploy` builds and pushes `dist/` to the `gh-pages` branch.
+Тестов нет.
 
-## Design system
+## Как работать с проектом
 
-All colors are CSS custom properties defined in `:root` inside the `styles` string in `App.jsx`: `--cream`, `--warm`, `--sand`, `--dust`, `--brown`, `--deep`, `--ink`, `--rose`, `--sage`, `--gold`. Fonts are Playfair Display (headings) and DM Sans (body), loaded from Google Fonts.
+- В начале каждой сессии читай этот файл, затем нужные документы из `.business/` и `plans/`.
+- Если меняется бизнес-логика — обновляй `.business/INDEX.md` и нужный файл.
+- Если меняется технический план — обновляй соответствующий план в `plans/`.
+- Если появляется новая важная папка или документ — обновляй этот `CLAUDE.md`.
+
+## ВАЖНО: план для каждой новой функции
+
+Любая функция, которую мы создаём в любом чате, всегда оформляется планом в папке `plans/`.
+
+Правила:
+1. Один план = одна функция. Если план уже есть — работаем с ним.
+2. Имя файла: `YYYY-MM-DD-название-функции.md`.
+3. План делится на фазы. У каждой фазы статус `[ ]` или `[x]`.
+4. В конце плана — итоговый блок: реализован целиком или нет, что осталось.
+5. Любой агент обязан актуализировать план после каждой сессии.
+
+## ВАЖНО: завершение каждого чата
+
+В конце каждой сессии записывай рефлексию в `.business/история/YYYY-MM-DD-краткое-название.md`.
+
+Формат:
+1. Какая задача была поставлена.
+2. Как я её решал.
+3. Решил ли — да / нет / частично.
+4. Эффективно ли решение, что можно было лучше.
+5. Как было и как стало.
+
+## Язык
+
+Всегда отвечай на русском.
