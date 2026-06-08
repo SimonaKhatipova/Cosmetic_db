@@ -55,8 +55,17 @@
 - Стекло: те же токены что в DesignPreview.jsx (C.glass, C.glassBd, C.shadow)
 - Цвета: palette без изменений (#0f6b4d, #eef2ef, etc.)
 
+### Фаза 5 — PNG-цветы и тестовая ветка [x]
+- [x] Заменить SVG-цветы на реальный PNG (`public/flowers/flower.png`, 320×320, alpha)
+- [x] 10 цветов: разные hue-rotate + saturate, размеры 160–540px, случайные позиции
+- [x] Непрозрачность повышена до 0.08–0.12 (по запросу «чуть меньше прозрачности»)
+- [x] Создана ветка `test/full-app`: `npm run dev` → DesignPreview (лендинг + приложение)
+
 ## Итог
 
-[x] Фаза 1 и 2 реализованы. Превью: `npm run design` → http://localhost:5174/preview.html
+[x] Фазы 1, 2, 4, 5 реализованы.
+
+- Дизайн-превью: `npm run design` → http://localhost:5174/preview.html
+- Полное тестирование: `git checkout test/full-app && npm run dev`
 
 Осталось (фаза 3): freemium-гейтинг в основном App.jsx.
