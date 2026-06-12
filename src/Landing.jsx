@@ -56,6 +56,9 @@ function FlowersBg() {
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none", overflow: "hidden" }}>
+      {/* размытые фиолетовые акценты — лёгкая глубина, не спорят с контентом */}
+      <div style={{ position: "absolute", left: "-8%", top: "24%", width: 560, height: 560, borderRadius: "50%", background: "rgba(155,125,180,0.14)", filter: "blur(95px)" }} />
+      <div style={{ position: "absolute", left: "70%", top: "68%", width: 480, height: 480, borderRadius: "50%", background: "rgba(155,125,180,0.11)", filter: "blur(95px)" }} />
       {flowers.map(({ hue, size, left, top, opacity, rot }, i) => (
         <div key={i} style={{
           position: "absolute", left, top,
@@ -64,7 +67,7 @@ function FlowersBg() {
           transform: `rotate(${rot}deg)`,
         }}>
           <img
-            src="/flowers/flower.png"
+            src={`${import.meta.env.BASE_URL}flowers/flower.png`}
             width={size} height={size}
             alt=""
             style={{

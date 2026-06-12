@@ -8,6 +8,13 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 // Токен текущей сессии (после входа). Пока null — используется anon-ключ.
 let ACCESS_TOKEN = null;
+// Профиль вошедшего пользователя (объект user из Supabase Auth).
+let CURRENT_USER = null;
+const userName = () => CURRENT_USER?.user_metadata?.name || null;
+// Владелец проекта: только ему доступен режим редактора (запись в БД
+// дополнительно закрыта RLS-политиками — см. plans/security_rls_lockdown.sql).
+const ADMIN_EMAIL = "simonakhatipova@gmail.com";
+const isAdmin = () => CURRENT_USER?.email === ADMIN_EMAIL;
 
 function authHeaders() {
   return {
@@ -108,12 +115,14 @@ async function signIn(email, password) {
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error_description || data?.msg || "Ошибка входа");
   ACCESS_TOKEN = data.access_token;
+  CURRENT_USER = data.user || null;
   try { localStorage.setItem("sb_token", data.access_token); } catch {}
   return data;
 }
 
 function signOut() {
   ACCESS_TOKEN = null;
+  CURRENT_USER = null;
   try { localStorage.removeItem("sb_token"); } catch {}
 }
 
@@ -141,6 +150,7 @@ async function verifyOtp(email, token) {
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error_description || data?.msg || "Неверный код");
   ACCESS_TOKEN = data.access_token;
+  CURRENT_USER = data.user || null;
   try { localStorage.setItem("sb_token", data.access_token); } catch { /* localStorage недоступен */ }
   return data;
 }
@@ -154,8 +164,20 @@ async function restoreSession() {
     headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
   });
   if (!res.ok) { signOut(); return false; }
+  try { CURRENT_USER = await res.json(); } catch { CURRENT_USER = null; }
   ACCESS_TOKEN = token;
   return true;
+}
+
+// Сохранить имя в профиле (user_metadata) — вызывается после подтверждения кода
+async function updateUserName(name) {
+  await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    method: "PUT",
+    headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${ACCESS_TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ data: { name } })
+  });
+  if (CURRENT_USER) CURRENT_USER = { ...CURRENT_USER, user_metadata: { ...CURRENT_USER.user_metadata, name } };
+  else CURRENT_USER = { user_metadata: { name } };
 }
 
 
@@ -163,7 +185,7 @@ async function restoreSession() {
 
 const GROUP_COLORS = {
   "ПАВ": "#3f7fb0", "Масла": "#b07d2e", "Витамины": "#3f8f5a", "Отдушки": "#b04f82",
-  "Кислоты": "#b0524a", "Структурообразователи": "#6b6e5a", "Растворители": "#4a8a9a",
+  "Кислоты": "#8a63b8", "Структурообразователи": "#6b6e5a", "Растворители": "#4a8a9a",
   "Технические": "#6b6e5a", "Эмоленты": "#b07d2e", "Кондиционеры": "#3f7fb0",
   "Протеины": "#3f8f5a", "Увлажнители": "#4a8a9a", "unknown": "#8b8f86",
 };
@@ -237,6 +259,38 @@ const descFor = (map, group, subgroup, subgroup2) => {
     || SUBGROUP_DESC[group]
     || null;
 };
+
+// ─── FUZZY-ПОИСК: опечатки в запросе не должны прятать результат ─────────────
+// Расстояние Левенштейна с отсечкой: как только минимум в строке DP превышает
+// max — дальше можно не считать.
+function levDist(a, b, max) {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+// Есть ли в тексте слово, похожее на запрос (включая совпадение по началу слова).
+// Допуск растёт с длиной запроса: 4–5 букв — 1 опечатка, 6–8 — 2, дальше — 3.
+function fuzzyIncludes(text, q) {
+  if (!text) return false;
+  const max = q.length <= 5 ? 1 : q.length <= 8 ? 2 : 3;
+  for (const w of String(text).toLowerCase().split(/[^a-zа-яё0-9]+/)) {
+    if (!w || w.length + max < q.length) continue; // слово заметно короче запроса — мимо
+    if (levDist(w.slice(0, q.length + max), q, max) <= max) return true;
+  }
+  return false;
+}
 
 // ─── ДВИЖОК ПОХОЖЕСТИ ПО СОСТАВУ ─────────────────────────────────────────────
 // Сравниваем только АКТИВНУЮ часть состава: ингредиенты до первой отдушки (~>1%).
@@ -388,23 +442,14 @@ const styles = `
     background-attachment: fixed;
   }
 
-  /* ── Падающие цветочки ── */
-  .petals-canvas {
+  /* ── Фон: крупные цветы + размытые фиолетовые пятна ── */
+  .flowers-backdrop {
     position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden;
   }
-  .petal {
-    position: absolute; top: -60px; opacity: 0;
-    animation: petalFall linear infinite;
-    will-change: transform, opacity;
-  }
-  .petal svg { display: block; }
-  @keyframes petalFall {
-    0%   { opacity: 0; transform: translateY(0) rotate(0deg) scale(1); }
-    8%   { opacity: 0.7; }
-    90%  { opacity: 0.5; }
-    100% { opacity: 0; transform: translateY(105vh) rotate(360deg) scale(0.85); }
-  }
-  /* чтобы контент был поверх лепестков */
+  .bg-blob { position: absolute; border-radius: 50%; filter: blur(90px); }
+  .bg-blob-1 { width: 540px; height: 540px; left: -10%; top: 32%; background: rgba(155,125,180,0.16); }
+  .bg-blob-2 { width: 460px; height: 460px; left: 72%; top: -12%; background: rgba(155,125,180,0.12); }
+  /* чтобы контент был поверх фона */
   .topbar, .tabs-bar, .main { position: relative; z-index: 2; }
 
   /* ── ШАПКА: движущийся градиент-«шёлк», поверх светлая стеклянная вуаль для читаемости ── */
@@ -446,6 +491,10 @@ const styles = `
   @media (prefers-reduced-motion: reduce) { .topbar-aurora { animation: none; } }
   .brand, .topbar-actions { position: relative; z-index: 1; }
   .topbar-actions { margin-left: auto; }
+  .topbar-user {
+    font-size: 13px; font-weight: 600; color: var(--ink-soft);
+    margin-right: 4px; white-space: nowrap;
+  }
 
   .brand { display: flex; align-items: center; gap: 11px; }
   .brand-mark {
@@ -597,8 +646,16 @@ const styles = `
   .hier-sub {
     margin: 2px 0 4px 8px; padding-left: 6px;
     border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    max-height: 340px; overflow-y: auto;
   }
   .hier-sub .hier-item { font-size: 13px; padding: 7px 10px; }
+  .hier-sub-head {
+    padding: 8px 10px 4px; margin-top: 2px; border-radius: 8px; cursor: pointer;
+    font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--ink-faint); transition: background .12s, color .12s;
+  }
+  .hier-sub-head:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent-deep); }
+  .hier-sub-head.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); }
   .filter-reset {
     background: none; border: none; cursor: pointer; color: var(--rose);
     font-family: inherit; font-size: 13px; font-weight: 600; padding: 10px 4px; white-space: nowrap;
@@ -1379,6 +1436,13 @@ const styles = `
     font-size: 9px; color: var(--ink-faint); display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   }
   .reg-code-input { font-size: 22px; letter-spacing: .35em; text-align: center; font-weight: 700; }
+  /* регистрация поверх лендинга: фон лендинга блюрится, своя заливка экрана убирается */
+  .reg-overlay {
+    position: fixed; inset: 0; z-index: 400; overflow-y: auto;
+    background: rgba(238,242,239,0.55);
+    backdrop-filter: blur(16px) saturate(120%); -webkit-backdrop-filter: blur(16px) saturate(120%);
+  }
+  .reg-overlay .login3-wrap { background: none; min-height: 100vh; }
   .reg-btn-outline {
     width: 100%; margin-top: 9px; padding: 12px; border-radius: 12px; cursor: pointer;
     background: transparent; color: var(--accent); border: 1.5px solid var(--accent);
@@ -1478,7 +1542,8 @@ export default function App() {
   const [detail, setDetail] = useState(null);          // карточка ингредиента/группы
   const [showAddProduct, setShowAddProduct] = useState(false);
   const [showAddIngredient, setShowAddIngredient] = useState(false);
-  const [filters, setFilters] = useState({ type: "", fn: "", scalp: "", wash: "", price: "", flags: {} });
+  // type — человекочитаемый лейбл выбора; typeSel — { label, sheet, types[] } или null
+  const [filters, setFilters] = useState({ type: "", typeSel: null, fn: "", scalp: "", wash: "", price: "", flags: {} });
   const [prodSort, setProdSort] = useState("recommend");   // recommend | date | price | name | type | brand
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [removeBgKey, setRemoveBgKey] = useState("");
@@ -1702,17 +1767,25 @@ export default function App() {
   });
 
   const filteredProducts = (() => {
-    const list = products.filter(p => {
-      const q = search.toLowerCase();
-      if (q && !(p.name?.toLowerCase().includes(q) || p.brand?.toLowerCase().includes(q))) return false;
-      if (filters.type && p.product_type !== filters.type) return false;
+    const q = search.toLowerCase().trim();
+    const passesFilters = (p) => {
+      if (filters.typeSel) {
+        const { sheet, types } = filters.typeSel;
+        if (sheet && p.source_sheet !== sheet) return false;
+        if (!types.includes(p.product_type)) return false;
+      }
       if (filters.price && p.price_tier !== filters.price) return false;
       if (filters.wash && p.analytical_type !== filters.wash) return false;
       if (filters.scalp && !scalpKind(p).includes(filters.scalp)) return false;
       if (filters.fn) { const v = p["attr_" + filters.fn]; if (v !== "full" && v !== "some" && v !== true) return false; }
       for (const f of FLAGS) { if (filters.flags[f.id] && f.status === "live" && !f.test(p)) return false; }
       return true;
-    });
+    };
+    let list = products.filter(p =>
+      (!q || p.name?.toLowerCase().includes(q) || p.brand?.toLowerCase().includes(q)) && passesFilters(p));
+    // точных совпадений нет — ищем ближайшие (опечатки в запросе)
+    if (!list.length && q.length >= 4)
+      list = products.filter(p => (fuzzyIncludes(p.name, q) || fuzzyIncludes(p.brand, q)) && passesFilters(p));
     const byName = (a, b) => (a.name || "").localeCompare(b.name || "", "ru");
     const isRecommended = (p) => {
       const n = (p.notes || "").toLowerCase();
@@ -1745,12 +1818,17 @@ export default function App() {
 
   const activeCount = [filters.type, filters.fn, filters.price, filters.scalp, filters.wash].filter(Boolean).length
     + Object.values(filters.flags).filter(Boolean).length;
-  const resetFilters = () => setFilters({ type: "", fn: "", scalp: "", wash: "", price: "", flags: {} });
+  const resetFilters = () => setFilters({ type: "", typeSel: null, fn: "", scalp: "", wash: "", price: "", flags: {} });
   const toggleFlag = (id) => setFilters(f => ({ ...f, flags: { ...f.flags, [id]: !f.flags[id] } }));
-  const setType = (val) => setFilters(f => {
-    const l = (val || "").toLowerCase();
+  // sel: null/"" — сброс; { label, sheet, types } — один тип или целая подгруппа
+  const setType = (sel) => setFilters(f => {
+    const next = sel && sel.types?.length ? sel : null;
+    const l = (next?.label || "").toLowerCase();
     const sh = l.includes("шампунь"), mk = !!l.match(/маск|кондиционер/);
-    return { ...f, type: val, fn: (!val || mk) ? f.fn : "", scalp: (!val || sh) ? f.scalp : "", wash: (!val || sh) ? f.wash : "" };
+    return {
+      ...f, type: next?.label || "", typeSel: next,
+      fn: (!next || mk) ? f.fn : "", scalp: (!next || sh) ? f.scalp : "", wash: (!next || sh) ? f.wash : ""
+    };
   });
 
   const productTypes = opt.types;
@@ -1759,7 +1837,8 @@ export default function App() {
   if (!authed) return (
     <>
       <style>{styles}</style>
-      {authScreen === "landing" && (
+      {/* регистрация — оверлеем поверх заблюренного лендинга, поэтому лендинг остаётся в дереве */}
+      {(authScreen === "landing" || authScreen === "register") && (
         <Landing
           onLogin={() => setAuthScreen("login")}
           onRegister={() => setAuthScreen("register")}
@@ -1772,10 +1851,12 @@ export default function App() {
           onBack={() => setAuthScreen("landing")} />
       )}
       {authScreen === "register" && (
-        <RegisterScreen onSuccess={() => setAuthed(true)}
-          onShowLogin={() => setAuthScreen("login")}
-          onBack={() => setAuthScreen("landing")}
-          onPurchase={() => { setAuthed(true); setShowPurchase(true); }} />
+        <div className="reg-overlay" onClick={e => { if (e.target === e.currentTarget) setAuthScreen("landing"); }}>
+          <RegisterScreen onSuccess={() => setAuthed(true)}
+            onShowLogin={() => setAuthScreen("login")}
+            onBack={() => setAuthScreen("landing")}
+            onPurchase={() => { setAuthed(true); setShowPurchase(true); }} />
+        </div>
       )}
       {showPurchase && <PurchaseModal onClose={() => setShowPurchase(false)} onSuccess={purchaseDone} />}
       {purchaseToast && <div className="purchase-toast">Подписка оформлена</div>}
@@ -1848,12 +1929,15 @@ export default function App() {
             <div className="brand-text"><strong>beauty helper</strong><span>косметическая база · анализ составов</span></div>
           </div>
           <div className="topbar-actions">
-            <button className={`btn btn-sm ${editorMode ? "btn-primary" : "btn-glass"}`} onClick={() => setEditorMode(m => !m)}>
-              {editorMode ? "✓ Режим редактора" : "Режим редактора"}
-            </button>
-            {editorMode && tab === "products" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddProduct(true)}>+ Средство</button>}
-            {editorMode && tab === "ingredients" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddIngredient(true)}>+ Ингредиент</button>}
-            <button className="btn btn-glass btn-sm" onClick={() => setShowSettings(s => !s)} title="Настройки">⚙</button>
+            {userName() && <span className="topbar-user">Привет, {userName()}</span>}
+            {isAdmin() && (
+              <button className={`btn btn-sm ${editorMode ? "btn-primary" : "btn-glass"}`} onClick={() => setEditorMode(m => !m)}>
+                {editorMode ? "✓ Режим редактора" : "Режим редактора"}
+              </button>
+            )}
+            {isAdmin() && editorMode && tab === "products" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddProduct(true)}>+ Средство</button>}
+            {isAdmin() && editorMode && tab === "ingredients" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddIngredient(true)}>+ Ингредиент</button>}
+            {isAdmin() && <button className="btn btn-glass btn-sm" onClick={() => setShowSettings(s => !s)} title="Настройки">⚙</button>}
             <button className="btn btn-glass btn-sm" onClick={() => { signOut(); setAuthed(false); setAuthScreen("landing"); setShowPurchase(false); }}>Выйти</button>
           </div>
         </div>
@@ -1896,7 +1980,7 @@ export default function App() {
                 <div className="filter-panel">
                   <div className="filter-field">
                     <label>Вид средства</label>
-                    <HierType value={filters.type} onChange={setType} types={opt.types} />
+                    <HierType value={filters.type} sel={filters.typeSel} onChange={setType} types={opt.types} />
                   </div>
                   {showFnFilter && (
                     <div className="filter-field">
@@ -1950,7 +2034,7 @@ export default function App() {
 
               {activeCount > 0 && (
                 <div className="filter-chips">
-                  {filters.type && <span className="chip" onClick={() => setType("")}>{filters.type} ✕</span>}
+                  {filters.type && <span className="chip" onClick={() => setType(null)}>{filters.type} ✕</span>}
                   {filters.fn && <span className="chip" onClick={() => setFilters(f => ({ ...f, fn: "" }))}>{FN_KEYS[filters.fn]} ✕</span>}
                   {filters.scalp && <span className="chip" onClick={() => setFilters(f => ({ ...f, scalp: "" }))} style={{ textTransform: "capitalize" }}>Кожа: {filters.scalp} ✕</span>}
                   {filters.wash && <span className="chip" onClick={() => setFilters(f => ({ ...f, wash: "" }))}>{filters.wash} ✕</span>}
@@ -2106,17 +2190,39 @@ function ProductThumb({ product, size = 56 }) {
 // ─── ИЕРАРХИЧЕСКИЙ ФИЛЬТР ВИДА СРЕДСТВА (раскрытие при наведении) ─────────────
 // минималистичные иконки одного стиля (line icons, 18×18, stroke currentColor)
 const HIER_ICONS = {
-  "Волосы": <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M5 4c0 6 1 10 2 16M12 3c0 7 0 11-1 17M19 4c0 6-1 10-2 16" /></svg>,
-  "Лицо и тело": <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M9 10h.01M15 10h.01M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8" /></svg>,
-  "Укладка": <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3h7l-1 6 4 1-7 11 1-8-4-1z" /></svg>,
+  "Уход за волосами": <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M5 4c0 6 1 10 2 16M12 3c0 7 0 11-1 17M19 4c0 6-1 10-2 16" /></svg>,
+  "Уход за кожей": <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M9 10h.01M15 10h.01M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8" /></svg>,
   "Прочее": <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" /></svg>,
 };
-const TYPE_HIER = [
-  { label: "Волосы", keywords: ["шампунь","маска","кондиционер","масло","несмываемое","ко-вошинг","хелатное","несмываемый","спрей","бальзам для волос","флюид"] },
-  { label: "Лицо и тело", keywords: ["крем","сыворотка","тонер","гель","лосьон","молочко","мицеллярная","пенка","скраб","пилинг","пудра","салфетки","очищение","макияж","spf","эссенция","уход за губами","бальзам для губ","эмульсия","маска для лица","ампула","бальзам"] },
-  { label: "Укладка", keywords: ["укладка","текстурайзер","стайлинг"] },
+// Иерархия «Группа → Подгруппа → Тип» (источник: product_type_tree.csv, 12.06.2026).
+// Тёзки между группами («Крем», «Пилинг», «Спрей», «Лосьон», «Маска») различаются
+// листом выгрузки source_sheet — он хранится у каждого продукта.
+const SHEET_HAIR = "Анализ для волос", SHEET_SKIN = "Анализ косметики";
+const PRODUCT_TYPE_TREE = [
+  { group: "Уход за волосами", sheet: SHEET_HAIR, subs: [
+    { label: "Очищение", types: ["Шампунь", "Хелатный шампунь", "Шампунь глубокой очистки"] },
+    { label: "Пилинг и эксфолиация", types: ["Пилинг"] },
+    { label: "Кондиционирование и маски", types: ["Маска / Кондиционер"] },
+    { label: "Несмываемый уход", types: ["Спрей", "Крем", "Масло", "Лосьон"] },
+    { label: "Укладка", types: ["Гель для укладки", "Пенка для укладки", "Текстурайзер"] },
+  ]},
+  { group: "Уход за кожей", sheet: SHEET_SKIN, subs: [
+    { label: "Очищение", types: ["Пенка", "Очищающее средство", "Мицеллярная вода", "Салфетки"] },
+    { label: "Тонизирование", types: ["Тонер", "Тоник", "Мист"] },
+    { label: "Эксфолиация", types: ["Пудра", "Пилинг", "Скраб", "Сыворотка-пилинг"] },
+    { label: "Сыворотки и концентраты", types: ["Сыворотка", "Эссенция", "Флюид", "Ампула"] },
+    { label: "Увлажнение и питание", types: ["Крем", "Гель", "Бальзам", "Лосьон", "Крем-гель", "Эмульсия", "Молочко", "Спрей"] },
+    { label: "Маски", types: ["Маска"] },
+    { label: "Локальный уход", types: ["Стик", "Точечное средство"] },
+    { label: "Солнцезащита", types: ["Солнцезащитное средство"] },
+    { label: "Декоративная косметика", types: ["База под макияж", "Консилер", "Тональная основа", "Палетка теней"] },
+  ]},
 ];
-function HierType({ value, onChange, types = [] }) {
+const TYPE_TREE_KNOWN = new Set(PRODUCT_TYPE_TREE.flatMap(g => g.subs.flatMap(s => s.types)));
+
+// onChange получает null (сброс) или { label, sheet, types: [...] } —
+// один тип или целую подгруппу.
+function HierType({ value, sel, onChange, types = [] }) {
   const [open, setOpen] = useState(false);
   const [hovered, setHovered] = useState(null);
   const wrapRef = useRef(null);
@@ -2127,20 +2233,11 @@ function HierType({ value, onChange, types = [] }) {
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
-  // распределяем типы по категориям
-  const used = new Set();
-  const groups = TYPE_HIER.map(g => {
-    const items = types.filter(t => {
-      const tl = t.toLowerCase();
-      return g.keywords.some(k => tl.includes(k)) && !used.has(t);
-    });
-    items.forEach(t => used.add(t));
-    return { label: g.label, items };
-  }).filter(g => g.items.length);
-  const rest = types.filter(t => !used.has(t));
-  if (rest.length) groups.push({ label: "Прочее", items: rest });
+  // типы из БД, которых ещё нет в дереве — показываем в «Прочее», чтобы не потерять
+  const rest = types.filter(t => !TYPE_TREE_KNOWN.has(t));
 
-  const pick = (val) => { onChange(val); setOpen(false); setHovered(null); };
+  const pick = (v) => { onChange(v); setOpen(false); setHovered(null); };
+  const isActive = (label, sheet) => !!sel && sel.label === label && (sel.sheet || null) === (sheet || null);
 
   return (
     <div className="hier-type" ref={wrapRef}>
@@ -2150,26 +2247,63 @@ function HierType({ value, onChange, types = [] }) {
       </button>
       {open && (
         <div className="hier-menu">
-          <div className={`hier-root ${!value ? "active" : ""}`} onClick={() => pick("")}>Все виды</div>
-          {groups.map(g => (
-            <div key={g.label} className="hier-group"
-              onMouseEnter={() => setHovered(g.label)} onMouseLeave={() => setHovered(null)}>
+          <div className={`hier-root ${!value ? "active" : ""}`} onClick={() => pick(null)}>Все виды</div>
+          {PRODUCT_TYPE_TREE.map(g => {
+            // показываем только то, что реально есть в данных
+            const subs = g.subs
+              .map(s => ({ ...s, types: s.types.filter(t => types.includes(t)) }))
+              .filter(s => s.types.length);
+            if (!subs.length) return null;
+            return (
+              <div key={g.group} className="hier-group"
+                onMouseEnter={() => setHovered(g.group)} onMouseLeave={() => setHovered(null)}>
+                <div className="hier-group-head">
+                  <span className="hier-group-name">
+                    <span className="hier-ic">{HIER_ICONS[g.group]}</span>
+                    {g.group}
+                  </span>
+                  <span className="hier-arrow">›</span>
+                </div>
+                {hovered === g.group && (
+                  <div className="hier-sub">
+                    {subs.map(s => (
+                      <div key={s.label}>
+                        <div className={`hier-sub-head ${isActive(s.label, g.sheet) ? "active" : ""}`}
+                          title="Выбрать всю подгруппу"
+                          onClick={() => pick({ label: s.label, sheet: g.sheet, types: s.types })}>
+                          {s.label}
+                        </div>
+                        {s.types.map(t => (
+                          <div key={t} className={`hier-item ${isActive(t, g.sheet) ? "active" : ""}`}
+                            onClick={() => pick({ label: t, sheet: g.sheet, types: [t] })}>{t}</div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {rest.length > 0 && (
+            <div className="hier-group"
+              onMouseEnter={() => setHovered("Прочее")} onMouseLeave={() => setHovered(null)}>
               <div className="hier-group-head">
                 <span className="hier-group-name">
-                  <span className="hier-ic">{HIER_ICONS[g.label]}</span>
-                  {g.label}
+                  <span className="hier-ic">{HIER_ICONS["Прочее"]}</span>
+                  Прочее
                 </span>
                 <span className="hier-arrow">›</span>
               </div>
-              {hovered === g.label && (
+              {hovered === "Прочее" && (
                 <div className="hier-sub">
-                  {g.items.map(t => (
-                    <div key={t} className={`hier-item ${value === t ? "active" : ""}`} onClick={() => pick(t)}>{t}</div>
+                  {rest.map(t => (
+                    <div key={t} className={`hier-item ${isActive(t, null) ? "active" : ""}`}
+                      onClick={() => pick({ label: t, sheet: null, types: [t] })}>{t}</div>
                   ))}
                 </div>
               )}
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
@@ -3013,16 +3147,22 @@ function IngredientsTab({ data = [], loading, onOpenDetail, editorMode = false, 
   };
 
   const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    let rows = data.filter(i => {
-      const ms = !q || (i.inci_name || "").toLowerCase().includes(q) || (i.ru_name || "").toLowerCase().includes(q)
-        || (i.aliases || "").toLowerCase().includes(q);
-      if (!ms) return false;
+    const q = search.toLowerCase().trim();
+    const otherOk = (i) => {
       if (filterGroup && i.group !== filterGroup) return false;
       if (filterSub && i.subgroup !== filterSub) return false;
       if (onlyProblems && !isProblem(i)) return false;
       return true;
+    };
+    let rows = data.filter(i => {
+      const ms = !q || (i.inci_name || "").toLowerCase().includes(q) || (i.ru_name || "").toLowerCase().includes(q)
+        || (i.aliases || "").toLowerCase().includes(q);
+      return ms && otherOk(i);
     });
+    // точных совпадений нет — ищем ближайшие (опечатки в запросе)
+    if (!rows.length && q.length >= 4)
+      rows = data.filter(i =>
+        (fuzzyIncludes(i.inci_name, q) || fuzzyIncludes(i.ru_name, q) || fuzzyIncludes(i.aliases, q)) && otherOk(i));
     const byName = (a, b) => (a.inci_name || "").localeCompare(b.inci_name || "", "ru");
     if (sortBy === "alpha") rows = [...rows].sort(byName);
     else if (sortBy === "alpha-desc") rows = [...rows].sort((a, b) => byName(b, a));
@@ -3750,42 +3890,29 @@ function AddIngredientModal({ onClose, onSaved }) {
   );
 }
 
-// ─── ПАДАЮЩИЕ ЦВЕТОЧКИ ────────────────────────────────────────────────────────
-const PETAL_COLORS = ["#ffb7c5","#ffc8d4","#ff9eb5","#ffd6e0","rgba(255,182,206,0.6)","rgba(255,255,255,0.5)","#f7c5d5"];
-const PETAL_COUNT = 22;
-function PetalsSVG({ color, size }) {
-  // цветочек в стиле Bikini Bottom — 5 округлых лепестков
-  return (
-    <svg width={size} height={size} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <ellipse cx="20" cy="8"  rx="6" ry="9"  fill={color} transform="rotate(0 20 20)" />
-      <ellipse cx="20" cy="8"  rx="6" ry="9"  fill={color} transform="rotate(72 20 20)" />
-      <ellipse cx="20" cy="8"  rx="6" ry="9"  fill={color} transform="rotate(144 20 20)" />
-      <ellipse cx="20" cy="8"  rx="6" ry="9"  fill={color} transform="rotate(216 20 20)" />
-      <ellipse cx="20" cy="8"  rx="6" ry="9"  fill={color} transform="rotate(288 20 20)" />
-      <circle cx="20" cy="20" r="5" fill="rgba(255,255,200,0.85)" />
-    </svg>
-  );
-}
-const PETALS = Array.from({ length: PETAL_COUNT }, (_, i) => ({
-  id: i,
-  left: `${(i * 4.5 + Math.random() * 4) % 100}%`,
-  size: 14 + Math.floor(i * 1.3 % 18),
-  duration: `${7 + (i * 1.7 % 9)}s`,
-  delay: `${-(i * 0.8 % 12)}s`,
-  color: PETAL_COLORS[i % PETAL_COLORS.length],
-  drift: `${-30 + (i * 17 % 60)}px`,
-}));
+// ─── ФОН: КРУПНЫЕ PNG-ЦВЕТЫ + РАЗМЫТЫЕ ФИОЛЕТОВЫЕ АКЦЕНТЫ ───────────────────
+// Те же цветы из Bikini Bottom, что на лендинге, но реже и прозрачнее —
+// контент приложения плотный, фон не должен спорить с ним.
+const FLOWER_URL = import.meta.env.BASE_URL + "flowers/flower.png";
+const APP_FLOWERS = [
+  { hue:   0, size: 480, left: "-9%", top: "-7%", opacity: 0.07, rot:  14 }, // розовый
+  { hue: 260, size: 350, left: "86%", top:  "6%", opacity: 0.07, rot: -22 }, // фиолетовый
+  { hue: 175, size: 290, left: "-6%", top: "60%", opacity: 0.06, rot:  30 }, // бирюзовый
+  { hue: 195, size: 520, left: "76%", top: "58%", opacity: 0.06, rot: -10 }, // синий
+  { hue: 125, size: 210, left: "46%", top: "85%", opacity: 0.05, rot:  22 }, // зелёный
+];
 function PetalsBackground() {
   return (
-    <div className="petals-canvas" aria-hidden="true">
-      {PETALS.map(p => (
-        <div key={p.id} className="petal" style={{
-          left: p.left,
-          animationDuration: p.duration,
-          animationDelay: p.delay,
-        }}>
-          <PetalsSVG color={p.color} size={p.size} />
-        </div>
+    <div className="flowers-backdrop" aria-hidden="true">
+      <div className="bg-blob bg-blob-1" />
+      <div className="bg-blob bg-blob-2" />
+      {APP_FLOWERS.map(({ hue, size, left, top, opacity, rot }, i) => (
+        <img key={i} src={FLOWER_URL} alt="" width={size} height={size}
+          style={{
+            position: "absolute", left, top, width: size, height: size, opacity,
+            transform: `rotate(${rot}deg)`,
+            filter: hue ? `hue-rotate(${hue}deg) saturate(1.15)` : "saturate(1.05)",
+          }} />
       ))}
     </div>
   );
@@ -3964,6 +4091,7 @@ function LoginScreen({ onSuccess, onShowRegister, onBack }) {
 // Стиль — боевой login3 (как LoginScreen), функции перенесены из дизайн-прототипа DesignPreview.
 function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
   const [step, setStep] = useState(1);
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -3981,6 +4109,7 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
   };
 
   const sendCode = async () => {
+    if (!name.trim()) { setError("Введите имя"); return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { setError("Проверьте формат почты"); return; }
     setBusy(true); setError("");
     try { await sendOtp(email.trim()); setStep(2); }
@@ -3991,7 +4120,11 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
   const verify = async () => {
     if (code.length < 6) { setError("Введите 6 цифр из письма"); return; }
     setBusy(true); setError("");
-    try { await verifyOtp(email.trim(), code); setStep(3); }
+    try {
+      await verifyOtp(email.trim(), code);
+      if (name.trim()) await updateUserName(name.trim()).catch(() => {});
+      setStep(3);
+    }
     catch (e) { setError(humanError(e.message)); }
     finally { setBusy(false); }
   };
@@ -4023,9 +4156,16 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
               </div>
               {error && <div className="login3-error">{error}</div>}
               <div className="login3-field">
+                <label className="login3-label" htmlFor="reg-name">Имя</label>
+                <input id="reg-name" className="login3-input" type="text" value={name}
+                  autoComplete="given-name" placeholder="Как к вам обращаться?" autoFocus
+                  onChange={e => { setName(e.target.value); if (error) setError(""); }}
+                  onKeyDown={e => e.key === "Enter" && sendCode()} />
+              </div>
+              <div className="login3-field">
                 <label className="login3-label" htmlFor="reg-email">Почта</label>
                 <input id="reg-email" className="login3-input" type="email" value={email}
-                  autoComplete="email" placeholder="you@example.com" autoFocus
+                  autoComplete="email" placeholder="you@example.com"
                   onChange={e => { setEmail(e.target.value); if (error) setError(""); }}
                   onKeyDown={e => e.key === "Enter" && sendCode()} />
               </div>
@@ -4063,7 +4203,7 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
 
           {step === 3 && (
             <>
-              <h1 className="login3-title">Добро пожаловать!</h1>
+              <h1 className="login3-title">{name.trim() ? `${name.trim()}, добро пожаловать!` : "Добро пожаловать!"}</h1>
               <p className="login3-sub">Аккаунт создан. Вам доступно:</p>
               <div className="reg-perks reg-perks-free">
                 <div className="reg-perks-head">Доступно сейчас</div>
