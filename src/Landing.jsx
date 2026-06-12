@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect } from "react";
 import { motion } from "framer-motion";
+import { LEGAL } from "./legal.js";
 
 /* ── Дизайн-токены (те же что в App.jsx) ── */
 const C = {
@@ -39,40 +40,75 @@ function SectionLabel({ children, color }) {
 /* ════════════════════════════════════════
    BIKINI BOTTOM FLOWERS — реальные PNG с alpha
 ════════════════════════════════════════ */
+// Цветы вырезаны из спрайта по пиксельным маскам (без постороннего объекта):
+// flower-pink.png и flower-blue.png. Меньше штук, крупнее, часть — гигантские
+// и заблюренные; при наведении курсора медленно уплывают от него, как на воде.
+const FLOWER_IMGS = {
+  pink: `${import.meta.env.BASE_URL}flowers/flower-pink.png`,
+  blue: `${import.meta.env.BASE_URL}flowers/flower-blue.png`,
+};
+const BG_FLOWERS = [
+  { img: "pink", hue:   0, size: 740, left: "-13%", top: "-9%", opacity: 0.15, rot:  12, blur: 0 },  // гигантский розовый
+  { img: "blue", hue:   0, size: 430, left: "81%",  top:  "3%", opacity: 0.14, rot: -18, blur: 0 },  // голубой
+  { img: "pink", hue: 255, size: 300, left: "57%",  top: "36%", opacity: 0.12, rot:  30, blur: 5 },  // фиолетовый, размыт
+  { img: "blue", hue: 140, size: 860, left: "60%",  top: "56%", opacity: 0.11, rot:  -8, blur: 9 },  // гигантский зелёный, размыт
+  { img: "pink", hue:  45, size: 350, left: "5%",   top: "54%", opacity: 0.12, rot: -16, blur: 0 },  // янтарный
+  { img: "blue", hue: 235, size: 250, left: "30%",  top: "82%", opacity: 0.10, rot:  24, blur: 7 },  // сиреневый, размыт
+];
+
 function FlowersBg() {
-  // hue — CSS hue-rotate в градусах; 0 = исходный розовый
-  const flowers = [
-    { hue:   0, size: 460, left: "-8%",  top:  "1%",  opacity: 0.12, rot:  18 }, // розовый
-    { hue: 260, size: 340, left: "78%",  top:  "0%",  opacity: 0.11, rot: -22 }, // фиолетовый
-    { hue: 195, size: 540, left: "63%",  top: "27%",  opacity: 0.09, rot:  35 }, // синий
-    { hue: 125, size: 270, left:  "4%",  top: "37%",  opacity: 0.11, rot: -12 }, // зелёный
-    { hue: 175, size: 420, left: "82%",  top: "61%",  opacity: 0.10, rot:  28 }, // бирюзовый
-    { hue:  55, size: 310, left: "30%",  top: "73%",  opacity: 0.09, rot:  -8 }, // жёлтый
-    { hue: 330, size: 230, left: "49%",  top:  "9%",  opacity: 0.10, rot:  44 }, // алый
-    { hue: 235, size: 190, left: "17%",  top: "84%",  opacity: 0.09, rot: -30 }, // синe-сиреневый
-    { hue: 145, size: 380, left: "-4%",  top: "61%",  opacity: 0.08, rot:  10 }, // сочный зелёный
-    { hue:  15, size: 160, left: "60%",  top: "55%",  opacity: 0.09, rot: -18 }, // оранжевый
-  ];
+  const refs = useRef([]);
+
+  useEffect(() => {
+    let raf;
+    const cur = BG_FLOWERS.map(() => ({ x: 0, y: 0, tx: 0, ty: 0 }));
+    const onMove = (e) => {
+      refs.current.forEach((el, i) => {
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const dx = (r.left + r.width / 2) - e.clientX;
+        const dy = (r.top + r.height / 2) - e.clientY;
+        const dist = Math.hypot(dx, dy) || 1;
+        const influence = Math.max(0, 1 - dist / 520); // ближе курсор — сильнее «волна»
+        cur[i].tx = (dx / dist) * influence * 64;
+        cur[i].ty = (dy / dist) * influence * 64;
+      });
+    };
+    const tick = () => {
+      refs.current.forEach((el, i) => {
+        if (!el) return;
+        const c = cur[i];
+        c.x += (c.tx - c.x) * 0.018; // очень медленно, как по воде
+        c.y += (c.ty - c.y) * 0.018;
+        el.style.transform = `translate(${c.x.toFixed(2)}px, ${c.y.toFixed(2)}px) rotate(${BG_FLOWERS[i].rot}deg)`;
+      });
+      raf = requestAnimationFrame(tick);
+    };
+    window.addEventListener("mousemove", onMove);
+    raf = requestAnimationFrame(tick);
+    return () => { window.removeEventListener("mousemove", onMove); cancelAnimationFrame(raf); };
+  }, []);
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none", overflow: "hidden" }}>
-      {/* размытые фиолетовые акценты — лёгкая глубина, не спорят с контентом */}
-      <div style={{ position: "absolute", left: "-8%", top: "24%", width: 560, height: 560, borderRadius: "50%", background: "rgba(155,125,180,0.14)", filter: "blur(95px)" }} />
-      <div style={{ position: "absolute", left: "70%", top: "68%", width: 480, height: 480, borderRadius: "50%", background: "rgba(155,125,180,0.11)", filter: "blur(95px)" }} />
-      {flowers.map(({ hue, size, left, top, opacity, rot }, i) => (
-        <div key={i} style={{
+      {/* размытые фиолетовые акценты — глубина и настроение */}
+      <div style={{ position: "absolute", left: "-8%", top: "22%", width: 620, height: 620, borderRadius: "50%", background: "rgba(155,125,180,0.16)", filter: "blur(100px)" }} />
+      <div style={{ position: "absolute", left: "68%", top: "-8%", width: 460, height: 460, borderRadius: "50%", background: "rgba(155,125,180,0.12)", filter: "blur(95px)" }} />
+      <div style={{ position: "absolute", left: "38%", top: "66%", width: 520, height: 520, borderRadius: "50%", background: "rgba(139,99,184,0.10)", filter: "blur(110px)" }} />
+      {BG_FLOWERS.map(({ img, hue, size, left, top, opacity, rot, blur }, i) => (
+        <div key={i} ref={el => { refs.current[i] = el; }} style={{
           position: "absolute", left, top,
-          width: size, height: size,
-          opacity,
+          width: size, height: size, opacity,
           transform: `rotate(${rot}deg)`,
+          willChange: "transform",
         }}>
           <img
-            src={`${import.meta.env.BASE_URL}flowers/flower.png`}
+            src={FLOWER_IMGS[img]}
             width={size} height={size}
             alt=""
             style={{
-              display: "block", width: "100%", height: "100%",
-              filter: hue !== 0 ? `hue-rotate(${hue}deg) saturate(1.2)` : "saturate(1.1)",
+              display: "block", width: "100%", height: "100%", objectFit: "contain",
+              filter: `${hue ? `hue-rotate(${hue}deg) saturate(1.2)` : "saturate(1.08)"}${blur ? ` blur(${blur}px)` : ""}`,
             }}
           />
         </div>
@@ -103,6 +139,15 @@ function Navbar({ onLogin, onRegister, onScrollPricing }) {
       </div>
       <div style={{ flex: 1 }} />
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {/* юр. требование: оферта и политика доступны из верхнего меню */}
+        <a href={LEGAL.offer} target="_blank" rel="noopener noreferrer" style={{
+          fontFamily: C.font, fontWeight: 500, fontSize: 12.5, color: C.inkFaint,
+          textDecoration: "none", padding: "9px 8px",
+        }}>Оферта</a>
+        <a href={LEGAL.policy} target="_blank" rel="noopener noreferrer" style={{
+          fontFamily: C.font, fontWeight: 500, fontSize: 12.5, color: C.inkFaint,
+          textDecoration: "none", padding: "9px 8px",
+        }}>Политика</a>
         <button onClick={onScrollPricing} style={{
           fontFamily: C.font, fontWeight: 600, fontSize: 14,
           padding: "9px 16px", borderRadius: 10, border: "none", cursor: "pointer",
@@ -200,7 +245,7 @@ function MiniCard({ name, type, bg, init }) {
 /* ── Шаги ухода (Утро/Вечер) ── */
 function CareSteps({ label, steps, color }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "nowrap" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
       <div style={{ fontSize: 10, fontWeight: 700, color, width: 40, flexShrink: 0, letterSpacing: ".04em" }}>
         {label}
       </div>
@@ -220,7 +265,9 @@ function CareSteps({ label, steps, color }) {
   );
 }
 
-/* ── Шкала восстановления волос (батарейка) ── */
+/* ── Шкала восстановления волос: змейка гонится за яблочками ──
+   Тело — синусоида, с каждым съеденным яблоком змейка длиннее, а её
+   шелковистые локоны, развевающиеся назад, — пышнее и длиннее. ── */
 const RECOVERY_STEPS = [
   { seg: 1, text: "1-я неделя: заметно меньше ломкости" },
   { seg: 3, text: "3-я неделя: волосы мягче на ощупь" },
@@ -230,18 +277,79 @@ const RECOVERY_STEPS = [
   { seg: 10, text: "10-я неделя: цель достигнута!" },
 ];
 
+const SNAKE = { x0: 30, x1: 308, cy: 36, apples: 10 };
+const HAIR_STRANDS = [
+  { dy: -7,  w: 2.2, o: 0.9  },
+  { dy: -4,  w: 1.9, o: 0.75 },
+  { dy: -1,  w: 1.6, o: 0.6  },
+  { dy: -9,  w: 1.5, o: 0.5  },
+];
+
 function HairRecoveryBar() {
-  const TOTAL = 10;
-  const [filled, setFilled] = useState(1);
+  const bodyRef = useRef(null);
+  const headRef = useRef(null);
+  const hairRefs = useRef([]);
+  const appleRefs = useRef([]);
+  const [week, setWeek] = useState(0);
+  const weekRef = useRef(0);
 
   useEffect(() => {
-    const t = setInterval(() => {
-      setFilled(f => (f >= TOTAL ? 0 : f + 1));
-    }, 1000); // 10 сегментов × 1 сек = 10 сек цикл
-    return () => clearInterval(t);
+    let raf, start;
+    const CYCLE = 16000, REST = 2200; // ~14с погони + пауза «цель достигнута»
+    const { x0, x1, cy, apples } = SNAKE;
+
+    const frame = (now) => {
+      if (start === undefined) start = now;
+      const p = Math.min(1, ((now - start) % CYCLE) / (CYCLE - REST));
+      const t = now / 1000;
+
+      const headX = x0 + (x1 - x0) * p;
+      const amp = 6.5 + 3.5 * p;
+      const wave = (x, damp = 1) => cy + amp * damp * Math.sin(0.082 * x + t * 2.3);
+
+      // тело: от головы назад, у головы колебание мягче
+      const L = 26 + 165 * p;
+      let d = "";
+      const N = 30;
+      for (let s = 0; s <= N; s++) {
+        const x = headX - (L * s) / N;
+        const y = wave(x, 0.3 + 0.7 * (s / N));
+        d += (s === 0 ? "M" : "L") + x.toFixed(1) + " " + y.toFixed(1) + " ";
+      }
+      bodyRef.current?.setAttribute("d", d);
+
+      const hy = wave(headX, 0.3);
+      headRef.current?.setAttribute("transform", `translate(${headX.toFixed(1)}, ${hy.toFixed(1)})`);
+
+      // локоны: от затылка назад, колышутся и растут с прогрессом
+      const hairLen = 9 + 42 * p;
+      hairRefs.current.forEach((h, i) => {
+        if (!h) return;
+        const { dy } = HAIR_STRANDS[i];
+        const sway = Math.sin(t * 2.7 + i * 1.15) * (2.5 + 2 * p);
+        const lift = dy * (0.6 + 0.55 * p);
+        h.setAttribute("d",
+          `M -2 ${(lift * 0.25).toFixed(1)} ` +
+          `q ${(-hairLen * 0.45).toFixed(1)} ${(lift * 0.6 + sway * 0.5).toFixed(1)} ` +
+          `${(-hairLen).toFixed(1)} ${(lift + sway).toFixed(1)}`);
+      });
+
+      // яблоки: съеденные исчезают
+      appleRefs.current.forEach((a, i) => {
+        if (!a) return;
+        const ax = x0 + (x1 - x0) * ((i + 1) / apples);
+        a.style.opacity = headX >= ax - 7 ? "0" : "1";
+      });
+
+      const w = Math.min(apples, Math.floor(p * apples + 1e-6) + (p >= 1 ? 0 : 0));
+      if (w !== weekRef.current) { weekRef.current = w; setWeek(w); }
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
   }, []);
 
-  const msg = [...RECOVERY_STEPS].reverse().find(s => filled >= s.seg)?.text ?? "Начинаем программу ухода...";
+  const msg = [...RECOVERY_STEPS].reverse().find(s => week >= s.seg)?.text ?? "Начинаем программу ухода…";
 
   return (
     <div style={{
@@ -249,27 +357,54 @@ function HairRecoveryBar() {
       borderRadius: 14, padding: "13px 17px",
       backdropFilter: "blur(12px)", boxShadow: C.shadowSm,
     }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
         <span style={{ fontSize: 9.5, fontWeight: 700, color: C.inkFaint, letterSpacing: ".1em", textTransform: "uppercase" }}>
           Восстановление волос
         </span>
-        <span style={{ fontSize: 11, fontWeight: 700, color: filled >= TOTAL ? C.accentS : C.inkSoft }}>
-          {filled * 10}%
+        <span style={{ fontSize: 11, fontWeight: 700, color: week >= SNAKE.apples ? C.accentS : C.inkSoft }}>
+          {week * 10}%
         </span>
       </div>
-      {/* Сегменты-батарейка */}
-      <div style={{ display: "flex", gap: 3.5, marginBottom: 9 }}>
-        {Array.from({ length: TOTAL }).map((_, i) => (
-          <div key={i} style={{
-            flex: 1, height: 9, borderRadius: 2.5,
-            background: i < filled
-              ? `linear-gradient(90deg, ${C.accentS}, ${C.accent})`
-              : "rgba(42,155,115,0.11)",
-            transition: "background 0.35s ease",
-            boxShadow: i < filled ? "0 1px 4px rgba(15,107,77,0.18)" : "none",
-          }}/>
-        ))}
-      </div>
+
+      <svg viewBox="0 0 340 64" style={{ display: "block", width: "100%", height: "auto", marginBottom: 4 }} aria-hidden="true">
+        <defs>
+          <linearGradient id="snakeBody" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stopColor="#2a9b73" stopOpacity="0.45" />
+            <stop offset="1" stopColor="#0f6b4d" />
+          </linearGradient>
+        </defs>
+
+        {/* яблочки на пути */}
+        {Array.from({ length: SNAKE.apples }).map((_, i) => {
+          const ax = SNAKE.x0 + (SNAKE.x1 - SNAKE.x0) * ((i + 1) / SNAKE.apples);
+          return (
+            <g key={i} ref={el => { appleRefs.current[i] = el; }}
+              transform={`translate(${ax}, ${SNAKE.cy})`}
+              style={{ transition: "opacity .45s ease" }}>
+              <circle r="4.4" fill="#d2544a" />
+              <circle r="4.4" fill="url(#snakeBody)" opacity="0.12" />
+              <path d="M 0 -4 q 0.6 -2.4 2 -3" stroke="#7a4a2e" strokeWidth="1.1" fill="none" strokeLinecap="round" />
+              <ellipse cx="2.6" cy="-6.2" rx="2" ry="1.1" fill="#2a9b73" transform="rotate(-24 2.6 -6.2)" />
+            </g>
+          );
+        })}
+
+        {/* тело змейки */}
+        <path ref={bodyRef} d="" fill="none" stroke="url(#snakeBody)" strokeWidth="7" strokeLinecap="round" />
+
+        {/* голова: мордочка + шелковистые локоны назад */}
+        <g ref={headRef}>
+          {HAIR_STRANDS.map((s, i) => (
+            <path key={i} ref={el => { hairRefs.current[i] = el; }} d=""
+              fill="none" stroke="#9b7db4" strokeWidth={s.w} strokeLinecap="round" opacity={s.o} />
+          ))}
+          <circle r="6.2" fill="#0f6b4d" />
+          <circle cx="2.4" cy="-1.8" r="1.5" fill="#fff" />
+          <circle cx="2.9" cy="-1.8" r="0.8" fill="#16241d" />
+          <path d="M 1.5 2.2 q 1.8 1.4 3.6 0.4" stroke="#fff" strokeWidth="0.9" fill="none" strokeLinecap="round" opacity="0.85" />
+        </g>
+      </svg>
+
       <div style={{ fontSize: 10.5, color: C.inkSoft, fontStyle: "italic" }}>{msg}</div>
     </div>
   );
@@ -350,13 +485,22 @@ function SafetyBadge() {
           <div style={{ fontSize: 10, color: C.inkFaint }}>безопасность</div>
         </div>
       </div>
-      <div style={{
-        display: "inline-flex", alignItems: "center", gap: 5,
-        background: "rgba(42,155,115,0.10)", border: `1px solid rgba(42,155,115,0.22)`,
-        borderRadius: 8, padding: "5px 10px",
-      }}>
-        <div style={{ width: 5, height: 5, borderRadius: 1.5, background: C.accentS }}/>
-        <span style={{ fontSize: 10, fontWeight: 700, color: C.accent, letterSpacing: ".04em" }}>Супер состав</span>
+      {/* значимые для пользователя флаги состава */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+        {[
+          { text: "Супер состав",            bg: "rgba(42,155,115,0.10)", bd: "rgba(42,155,115,0.22)", color: C.accent,   dot: C.accentS },
+          { text: "Рекомендовано",           bg: "rgba(42,155,115,0.05)", bd: "rgba(42,155,115,0.20)", color: C.accent,   dot: C.accentS },
+          { text: "Потенциальный аллерген",  bg: "rgba(201,138,58,0.10)", bd: "rgba(201,138,58,0.30)", color: "#9a6a24",  dot: "#c98a3a" },
+        ].map(({ text, bg, bd, color, dot }) => (
+          <div key={text} style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            background: bg, border: `1px solid ${bd}`,
+            borderRadius: 8, padding: "4px 9px",
+          }}>
+            <div style={{ width: 5, height: 5, borderRadius: 1.5, background: dot }}/>
+            <span style={{ fontSize: 9.5, fontWeight: 700, color, letterSpacing: ".03em" }}>{text}</span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -401,26 +545,26 @@ function Hero({ onRegister, onScrollPricing }) {
 
           <h1 style={{
             fontFamily: C.serif,
-            fontSize: "clamp(2.6rem, 5.2vw, 4rem)",
+            fontSize: "clamp(3rem, 5.8vw, 5.4rem)",
             fontWeight: 700, fontStyle: "italic",
-            color: C.ink, lineHeight: 1.08,
-            letterSpacing: "-0.022em", marginBottom: 24,
+            color: C.ink, lineHeight: 1.06,
+            letterSpacing: "-0.022em", marginBottom: 28,
           }}>
             Почему ваша<br />косметика<br />не работает?
           </h1>
 
           <p style={{
-            fontSize: "clamp(15px, 1.8vw, 17px)", color: C.inkSoft,
-            lineHeight: 1.72, maxWidth: 500, marginBottom: 36,
+            fontSize: "clamp(16px, 1.9vw, 20px)", color: C.inkSoft,
+            lineHeight: 1.72, maxWidth: 560, marginBottom: 40,
           }}>
             В большинстве случаев дело в составе. Beauty Helper объясняет
             что там написано и помогает выбрать то, что подходит именно Вам.
           </p>
 
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 52 }}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 56 }}>
             <button onClick={onRegister} style={{
-              fontFamily: C.font, fontWeight: 700, fontSize: 15,
-              padding: "14px 30px", borderRadius: 13, border: "none", cursor: "pointer",
+              fontFamily: C.font, fontWeight: 700, fontSize: "clamp(15px, 1.3vw, 17px)",
+              padding: "16px 34px", borderRadius: 14, border: "none", cursor: "pointer",
               background: C.accentD, color: "#fff",
               boxShadow: "0 6px 24px rgba(10,74,53,0.32)",
               letterSpacing: "-0.01em",
@@ -428,8 +572,8 @@ function Hero({ onRegister, onScrollPricing }) {
               Попробовать бесплатно
             </button>
             <button onClick={onScrollPricing} style={{
-              fontFamily: C.font, fontWeight: 600, fontSize: 15,
-              padding: "14px 28px", borderRadius: 13, cursor: "pointer",
+              fontFamily: C.font, fontWeight: 600, fontSize: "clamp(15px, 1.3vw, 17px)",
+              padding: "16px 32px", borderRadius: 14, cursor: "pointer",
               background: C.glass, color: C.inkSoft,
               border: `1px solid ${C.glassBd}`,
               backdropFilter: "blur(10px)",
@@ -441,22 +585,21 @@ function Hero({ onRegister, onScrollPricing }) {
           {/* Статистика */}
           <div style={{
             display: "flex", gap: 0, flexWrap: "wrap",
-            paddingTop: 28, borderTop: `1px solid ${C.line}`,
+            paddingTop: 30, borderTop: `1px solid ${C.line}`,
           }}>
             {[
               { value: "20 000+", label: "ингредиентов в базе" },
               { value: "1 200+",  label: "средств в каталоге" },
-              { value: "97%",     label: "положительных отзывов" },
             ].map(({ value, label }, i) => (
               <div key={label} style={{
-                paddingRight: 32, marginRight: 32,
-                borderRight: i < 2 ? `1px solid ${C.line}` : "none",
+                paddingRight: 36, marginRight: 36,
+                borderRight: i < 1 ? `1px solid ${C.line}` : "none",
               }}>
                 <div style={{
-                  fontSize: 22, fontWeight: 800, color: C.accent,
+                  fontSize: "clamp(24px, 2.1vw, 30px)", fontWeight: 800, color: C.accent,
                   letterSpacing: "-0.03em",
                 }}>{value}</div>
-                <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 2 }}>{label}</div>
+                <div style={{ fontSize: 13, color: C.inkFaint, marginTop: 3 }}>{label}</div>
               </div>
             ))}
           </div>
@@ -539,10 +682,10 @@ function Hero({ onRegister, onScrollPricing }) {
 
             {/* Шаги ухода */}
             {[
-              { n: 1, step: "Очищение",        product: "Шампунь б/с для жирной кожи головы" },
-              { n: 2, step: "Питание",          product: "Протеиновая маска, 1 раз в неделю" },
-              { n: 3, step: "Восстановление",   product: "Несмываемая сыворотка на концы" },
-              { n: 4, step: "Финишный уход",    product: "Лёгкое масло для защиты концов" },
+              { n: 1, step: "Глубокое очищение", product: "Раз в неделю — по Вашим индивидуальным показаниям" },
+              { n: 2, step: "Очищение",          product: "Шампунь, подобранный под Ваш тип кожи головы" },
+              { n: 3, step: "Уход",              product: "Смываемые средства: красота волос и восстановление повреждений" },
+              { n: 4, step: "Защита",            product: "Несмываемый финиш — минимум вреда от окружающей среды" },
             ].map(({ n, step, product }, i, arr) => (
               <div key={n} style={{
                 display: "flex", alignItems: "flex-start", gap: 11,
@@ -588,8 +731,8 @@ function Hero({ onRegister, onScrollPricing }) {
               }}>ПОДПИСКА</div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-              <CareSteps label="Утро"  steps={["Очищение", "Тонер", "SPF"]}              color={C.accentS} />
-              <CareSteps label="Вечер" steps={["Мицеллярная", "Ретинол", "Крем"]}       color="#9b7db4" />
+              <CareSteps label="Утро"  steps={["Очищение", "Активы", "Увлажнение и барьер", "Защита от солнца"]} color={C.accentS} />
+              <CareSteps label="Вечер" steps={["Демакияж", "Очищение", "Активы", "Увлажнение и барьер"]} color="#9b7db4" />
             </div>
           </div>
 
@@ -609,17 +752,17 @@ function Problems() {
     {
       n: "01",
       title: "Купили, а не подошло",
-      desc: "Вы тратите деньги на средство, которое советуют все. Оно не работает. Берёте следующее. Цикл повторяется: деньги уходят, разочарование накапливается.",
+      desc: "Деньги уходят на средства, «которые советуют все», а результата нет. Beauty Helper подбирает уход под Ваш тип кожи и волос — чтобы каждая покупка работала на Вашу цель, а не пылилась на полке.",
     },
     {
       n: "02",
-      title: "Состав - закрытая книга",
-      desc: "Phenoxyethanol, Caprylic Triglyceride, Niacinamide... Что безопасно, что вредно, с чем несовместимо. Ни одно приложение не объясняло это понятным языком.",
+      title: "Состав — закрытая книга",
+      desc: "Phenoxyethanol, Caprylic Triglyceride, Niacinamide… Мы расшифровываем каждый ингредиент на понятном русском: что он делает, кому подходит и на что обратить внимание именно Вам.",
     },
     {
       n: "03",
       title: "Советы работают не для Вас",
-      desc: "Блогеры и парикмахеры дают общие рекомендации. Но у Вас свой тип кожи и свои реакции. То, что помогло другим, для Вас может оказаться бесполезным или вредным.",
+      desc: "Общие рекомендации не учитывают Ваши особенности и реакции. Мы анализируем Ваш профиль и Ваши средства — и собираем схему, которая подходит лично Вам.",
     },
   ];
 
@@ -633,10 +776,14 @@ function Problems() {
         <SectionLabel>Знакомо?</SectionLabel>
         <h2 style={{
           fontFamily: C.serif, fontSize: "clamp(1.8rem, 3.5vw, 2.6rem)",
-          fontWeight: 600, color: C.ink, marginBottom: 48, letterSpacing: "-0.02em",
+          fontWeight: 600, color: C.ink, marginBottom: 14, letterSpacing: "-0.02em",
         }}>
           Почему так происходит
         </h2>
+        <p style={{ fontSize: 16, color: C.inkSoft, lineHeight: 1.65, marginBottom: 48, maxWidth: 640 }}>
+          Beauty Helper создан, чтобы закрыть эти боли — один сервис
+          для всех Ваших бьюти-вопросов.
+        </p>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
           {pains.map(({ n, title, desc }, i) => (
@@ -679,8 +826,8 @@ function Solution() {
     { label: "Анализ совместимости",          detail: "ингредиентов в Ваших средствах" },
   ];
 
-  const wash  = ["Шампунь б/с для кожи головы", "Питательный кондиционер", "Прохладное ополаскивание"];
-  const treat = ["Протеиновая маска 1x в неделю", "Несмываемая сыворотка на концы", "Масло для защиты от тепла"];
+  const wash  = ["Пилинг кожи головы", "Шампунь под Ваш тип кожи головы", "Комплексная маска", "Поверхностный кондиционер"];
+  const treat = ["Термозащита под Вашу рутину укладки", "Масло — финишный продукт"];
 
   return (
     <section style={{ padding: "96px clamp(1.5rem, 6vw, 4rem)" }}>
@@ -739,8 +886,8 @@ function Solution() {
             </div>
 
             {[
-              { label: "Мытьё", items: wash },
-              { label: "Уход",  items: treat },
+              { label: "Мытьё и уход", items: wash },
+              { label: "Укладка и защита", items: treat },
             ].map(({ label, items }, gi) => (
               <div key={label} style={{ marginBottom: gi === 0 ? 22 : 0 }}>
                 <div style={{
@@ -765,8 +912,22 @@ function Solution() {
               </div>
             ))}
 
+            {/* отдельная рутина для кудрявых */}
             <div style={{
-              marginTop: 18, paddingTop: 16, borderTop: `1px solid ${C.line}`,
+              marginTop: 18, padding: "12px 14px", borderRadius: 12,
+              background: "rgba(155,125,180,0.09)", border: "1px solid rgba(155,125,180,0.24)",
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#7b5da0", letterSpacing: ".06em", textTransform: "uppercase", marginBottom: 4 }}>
+                + Рутина для кудряшек
+              </div>
+              <div style={{ fontSize: 12.5, color: C.inkSoft, lineHeight: 1.55 }}>
+                Отдельная программа, которая раскрывает потенциал натуральной
+                красоты Ваших кудрявых волос.
+              </div>
+            </div>
+
+            <div style={{
+              marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.line}`,
               display: "flex", alignItems: "center", justifyContent: "space-between",
             }}>
               <span style={{ fontSize: 12, color: C.inkFaint }}>Подобрано под Ваш тип волос</span>
@@ -791,17 +952,17 @@ function HowItWorks() {
     {
       n: "1",
       title: "Расскажите о себе",
-      desc: "Пройдите короткий тест: тип кожи, тип волос, задачи и беспокойства. Займёт 2 минуты.",
+      desc: "Полный профессиональный тест: тип кожи и волос, их состояние, привычки, цели и беспокойства. Чем точнее профиль — тем точнее подбор средств под Ваши индивидуальные особенности.",
     },
     {
       n: "2",
-      title: "Расшифруйте состав",
-      desc: "Вставьте INCI-список с упаковки или найдите средство в каталоге. Получите разбор каждого ингредиента на русском.",
+      title: "Проанализируйте свой арсенал",
+      desc: "Проверьте всё, что уже стоит на Вашей полке: уход для волос, для лица и даже декоративную косметику. Узнаете, что действительно работает на Вас, а что стоит заменить.",
     },
     {
       n: "3",
-      title: "Получите готовую схему",
-      desc: "Beauty Helper составит индивидуальный уход: что покупать, в какой последовательности и почему это работает для Вас.",
+      title: "Идите к цели по схеме",
+      desc: "Получите индивидуальную схему ухода, ведите дневник прогресса — и двигайтесь к своим бьюти-целям вместе с нами: чувствовать себя счастливой, красивой, здоровой и уверенной.",
     },
   ];
 
@@ -863,19 +1024,34 @@ function HowItWorks() {
 function Testimonials() {
   const reviews = [
     {
-      text: "Наконец понял, почему шампуни сушили кожу головы. Нашёл альтернативы без сульфатов - за месяц разница заметна.",
-      name: "Алексей М.",
-      detail: "Повреждённые волосы после окрашивания",
+      text: "Годами казалось, что уход просто «не работает». Оказалось, средства спорили друг с другом. Со схемой появился результат, который видно в зеркале.",
+      name: "Полина С.",
+      detail: "Уход не давал результата",
     },
     {
-      text: "Долго не мог подобрать крем: всё или жирнило, или сушило. После теста на тип кожи нашёл нужное за один вечер.",
+      text: "После осветления волосы были как солома. Подобрали восстановление по составам — через два месяца они снова мягкие и блестят.",
       name: "Катя В.",
-      detail: "Комбинированная кожа, 28 лет",
+      detail: "Окрашенные волосы",
     },
     {
-      text: "Не понимала что покупать при выпадении. Схема ухода показала чего не хватало. Стало заметно лучше за 6 недель.",
+      text: "Перепробовала кучу «аптечных» шампуней от перхоти. Здесь объяснили, какие компоненты мне нужны, — проблема ушла и не возвращается.",
       name: "Мария Т.",
-      detail: "Активное выпадение волос",
+      detail: "Перхоть и чувствительная кожа головы",
+    },
+    {
+      text: "Длина наконец выглядит здоровой: волосы не пушатся и не электризуются. А я всего лишь убрала из рутины то, что мне не подходило.",
+      name: "Алина Р.",
+      detail: "Пушистость и электризация",
+    },
+    {
+      text: "Раньше покупала банки хаотично, по рекламе. Теперь у меня ясные этапы ухода и список того, что докупать. Трачу меньше, а эффект лучше.",
+      name: "Дарья К.",
+      detail: "Хаотичный уход и лишние траты",
+    },
+    {
+      text: "Тест на тип кожи расставил всё по местам: крем больше не жирнит, активы не конфликтуют. Кожа спокойная впервые за долгое время.",
+      name: "Софья Л.",
+      detail: "Комбинированная кожа, 28 лет",
     },
   ];
 
@@ -931,20 +1107,20 @@ function Testimonials() {
 ════════════════════════════════════════ */
 function PricingSection({ onRegister, onPurchase }) {
   const freeFeatures = [
-    "Каталог продуктов и поиск",
-    "Справочник ингредиентов",
-    "3 анализа состава",
-    "Тест на тип кожи и волос",
+    "7 поисков по базе средств в неделю",
+    "3 анализа своих средств в неделю (которых нет в базе)",
+    "Краткий тест на тип кожи и волос",
+    "Справочник 20 000+ ингредиентов",
     "Сравнение до 2 средств",
   ];
   const proFeatures = [
-    "Всё из бесплатного",
-    "Индивидуальная схема ухода для волос",
-    "Индивидуальная схема ухода для лица",
-    "Анализ совместимости средств",
-    "Неограниченные анализы состава",
-    "Сравнение до 5 средств",
-    "Подбор аналогов",
+    "Безлимитные поиски и анализы составов",
+    "Полный профессиональный тест + подбор средств под Вас",
+    "Индивидуальные схемы ухода: волосы и лицо",
+    "Анализ совместимости Ваших средств",
+    "Дневник прогресса — к бьюти-целям вместе с нами",
+    "Сравнение до 5 средств и подбор аналогов",
+    "Отдельная рутина для кудрявых волос",
   ];
 
   return (
@@ -962,7 +1138,8 @@ function PricingSection({ onRegister, onPurchase }) {
           Начните бесплатно
         </h2>
         <p style={{ fontSize: 16, color: C.inkSoft, marginBottom: 44, lineHeight: 1.6 }}>
-          Базовые функции доступны без оплаты. Индивидуальная схема ухода и анализ совместимости доступны в подписке.
+          Базовые функции — бесплатно и навсегда. Полный тест, индивидуальные
+          схемы ухода, безлимитные анализы и сопровождение к цели — в подписке.
         </p>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
@@ -1073,8 +1250,8 @@ function CTASection({ onRegister }) {
           Разберитесь в уходе<br />раз и навсегда
         </h2>
         <p style={{ fontSize: 16, color: C.inkSoft, lineHeight: 1.7, marginBottom: 36 }}>
-          Создайте аккаунт и получите бесплатный доступ к каталогу,
-          3 анализа состава и тест на тип кожи и волос.
+          Создайте аккаунт и получите бесплатный доступ: поиск по базе средств,
+          анализы своих средств и тест на тип кожи и волос.
         </p>
 
         <div style={{
@@ -1115,28 +1292,51 @@ function CTASection({ onRegister }) {
    FOOTER
 ════════════════════════════════════════ */
 function Footer({ onLogin }) {
+  const docLink = { fontSize: 12, color: C.inkFaint, textDecoration: "underline", textUnderlineOffset: 2 };
   return (
     <footer style={{
-      padding: "28px clamp(1.5rem, 6vw, 4rem)",
+      padding: "32px clamp(1.5rem, 6vw, 4rem) 28px",
       borderTop: `1px solid ${C.line}`,
-      display: "flex", alignItems: "center",
-      justifyContent: "space-between", flexWrap: "wrap", gap: 16,
     }}>
       <div style={{
-        fontFamily: "'Familjen Grotesk', sans-serif",
-        fontWeight: 700, fontSize: 17, color: C.ink, letterSpacing: "-0.028em",
+        display: "flex", alignItems: "flex-start",
+        justifyContent: "space-between", flexWrap: "wrap", gap: 24,
       }}>
-        Beauty Helper
+        <div>
+          <div style={{
+            fontFamily: "'Familjen Grotesk', sans-serif",
+            fontWeight: 700, fontSize: 17, color: C.ink, letterSpacing: "-0.028em",
+            marginBottom: 6,
+          }}>
+            Beauty Helper
+          </div>
+          <div style={{ fontSize: 12, color: C.inkFaint }}>by Simona · 2026</div>
+        </div>
+
+        {/* юридические документы */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          <a href={LEGAL.offer} target="_blank" rel="noopener noreferrer" style={docLink}>Оферта</a>
+          <a href={LEGAL.policy} target="_blank" rel="noopener noreferrer" style={docLink}>Политика обработки персональных данных</a>
+          <a href={LEGAL.pdConsent} target="_blank" rel="noopener noreferrer" style={docLink}>Согласие на обработку персональных данных</a>
+          <a href={LEGAL.adsConsent} target="_blank" rel="noopener noreferrer" style={docLink}>Согласие на получение рассылки</a>
+        </div>
+
+        {/* реквизиты */}
+        <div style={{ fontSize: 12, color: C.inkFaint, lineHeight: 1.8 }}>
+          <div>{LEGAL.ownerName}</div>
+          <div>ИНН {LEGAL.ownerInn}</div>
+          <a href={`mailto:${LEGAL.ownerEmail}`} style={{ color: C.inkFaint }}>{LEGAL.ownerEmail}</a>
+        </div>
+
+        <button onClick={onLogin} style={{
+          fontFamily: C.font, fontWeight: 600, fontSize: 13,
+          padding: "7px 16px", borderRadius: 9, cursor: "pointer",
+          background: "transparent", color: C.inkFaint,
+          border: `1px solid ${C.line}`,
+        }}>
+          Войти
+        </button>
       </div>
-      <div style={{ fontSize: 12, color: C.inkFaint }}>by Simona · 2026</div>
-      <button onClick={onLogin} style={{
-        fontFamily: C.font, fontWeight: 600, fontSize: 13,
-        padding: "7px 16px", borderRadius: 9, cursor: "pointer",
-        background: "transparent", color: C.inkFaint,
-        border: `1px solid ${C.line}`,
-      }}>
-        Войти
-      </button>
     </footer>
   );
 }

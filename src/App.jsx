@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import mascot from "./assets/mascot.png";
 import Landing from "./Landing.jsx";
 import { openPaymentWidget } from "./lib/cloudpayments.js";
+import { LEGAL } from "./legal.js";
 
 const SUPABASE_URL = "https://lcvszvxbszszqikboxeq.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxjdnN6dnhic3pzenFpa2JveGVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMDAyOTEsImV4cCI6MjA5NDY3NjI5MX0.W3yfYh9WWHv_7pBzAh5dTafDr8uOkWTc6LAIZLxCkAE";
@@ -169,15 +170,17 @@ async function restoreSession() {
   return true;
 }
 
-// Сохранить имя в профиле (user_metadata) — вызывается после подтверждения кода
-async function updateUserName(name) {
+// Сохранить профиль (user_metadata): имя, телефон, факты согласий с датой —
+// вызывается после подтверждения кода
+async function updateUserProfile(data) {
   await fetch(`${SUPABASE_URL}/auth/v1/user`, {
     method: "PUT",
     headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${ACCESS_TOKEN}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ data: { name } })
+    body: JSON.stringify({ data })
   });
-  if (CURRENT_USER) CURRENT_USER = { ...CURRENT_USER, user_metadata: { ...CURRENT_USER.user_metadata, name } };
-  else CURRENT_USER = { user_metadata: { name } };
+  CURRENT_USER = CURRENT_USER
+    ? { ...CURRENT_USER, user_metadata: { ...CURRENT_USER.user_metadata, ...data } }
+    : { user_metadata: { ...data } };
 }
 
 
@@ -1471,6 +1474,39 @@ const styles = `
     white-space: nowrap;
   }
 
+  /* ── юридические согласия (регистрация, оплата) ── */
+  .reg-consents { display: flex; flex-direction: column; gap: 9px; margin-bottom: 14px; text-align: left; }
+  .reg-consent {
+    display: flex; align-items: flex-start; gap: 9px; cursor: pointer;
+    font-size: 12px; color: var(--ink-soft); line-height: 1.5; user-select: none;
+  }
+  .reg-consent input {
+    appearance: none; -webkit-appearance: none; flex-shrink: 0; margin-top: 1px;
+    width: 17px; height: 17px; border-radius: 5px; cursor: pointer; position: relative;
+    border: 1.5px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    background: rgba(255,255,255,0.7); transition: background .15s, border-color .15s;
+  }
+  .reg-consent input:checked { background: var(--accent); border-color: var(--accent); }
+  .reg-consent input:checked::after {
+    content: ""; position: absolute; left: 4.5px; top: 1px; width: 4.5px; height: 8.5px;
+    border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
+  }
+  .reg-consent-link { color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+
+  /* ── плашка cookie ── */
+  .cookie-bar {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    z-index: 700; width: min(720px, calc(100vw - 28px));
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 14px 18px; border-radius: 16px;
+    background: rgba(247,252,251,0.94); border: 1px solid rgba(15,107,77,0.22);
+    backdrop-filter: blur(20px) saturate(140%); -webkit-backdrop-filter: blur(20px) saturate(140%);
+    box-shadow: 0 16px 44px -14px rgba(10,74,53,0.4);
+  }
+  .cookie-text { flex: 1 1 320px; font-size: 12px; color: var(--ink-soft); line-height: 1.55; }
+  .cookie-agree { white-space: nowrap; font-weight: 600; }
+  .cookie-bar .btn:disabled { opacity: .55; cursor: default; }
+
 `;
 
 
@@ -1860,6 +1896,7 @@ export default function App() {
       )}
       {showPurchase && <PurchaseModal onClose={() => setShowPurchase(false)} onSuccess={purchaseDone} />}
       {purchaseToast && <div className="purchase-toast">Подписка оформлена</div>}
+      <CookieConsent />
     </>
   );
 
@@ -1868,6 +1905,7 @@ export default function App() {
       <style>{styles}</style>
       {showPurchase && <PurchaseModal onClose={() => setShowPurchase(false)} onSuccess={purchaseDone} />}
       {purchaseToast && <div className="purchase-toast">Подписка оформлена</div>}
+      <CookieConsent />
       <div className="app">
         <PetalsBackground />
         <div className="topbar">
@@ -3891,27 +3929,30 @@ function AddIngredientModal({ onClose, onSaved }) {
 }
 
 // ─── ФОН: КРУПНЫЕ PNG-ЦВЕТЫ + РАЗМЫТЫЕ ФИОЛЕТОВЫЕ АКЦЕНТЫ ───────────────────
-// Те же цветы из Bikini Bottom, что на лендинге, но реже и прозрачнее —
-// контент приложения плотный, фон не должен спорить с ним.
-const FLOWER_URL = import.meta.env.BASE_URL + "flowers/flower.png";
+// Те же цветы из Bikini Bottom, что на лендинге (вырезаны из спрайта по
+// пиксельным маскам), но реже и прозрачнее — контент приложения плотный.
+const APP_FLOWER_IMGS = {
+  pink: import.meta.env.BASE_URL + "flowers/flower-pink.png",
+  blue: import.meta.env.BASE_URL + "flowers/flower-blue.png",
+};
 const APP_FLOWERS = [
-  { hue:   0, size: 480, left: "-9%", top: "-7%", opacity: 0.07, rot:  14 }, // розовый
-  { hue: 260, size: 350, left: "86%", top:  "6%", opacity: 0.07, rot: -22 }, // фиолетовый
-  { hue: 175, size: 290, left: "-6%", top: "60%", opacity: 0.06, rot:  30 }, // бирюзовый
-  { hue: 195, size: 520, left: "76%", top: "58%", opacity: 0.06, rot: -10 }, // синий
-  { hue: 125, size: 210, left: "46%", top: "85%", opacity: 0.05, rot:  22 }, // зелёный
+  { img: "pink", hue:   0, size: 560, left: "-11%", top: "-8%", opacity: 0.08, rot:  14, blur: 0 }, // крупный розовый
+  { img: "blue", hue: 260, size: 380, left: "86%",  top:  "5%", opacity: 0.07, rot: -22, blur: 0 }, // фиолетовый
+  { img: "blue", hue: 140, size: 640, left: "76%",  top: "58%", opacity: 0.06, rot: -10, blur: 8 }, // огромный зелёный, размыт
+  { img: "pink", hue:  45, size: 300, left: "-5%",  top: "62%", opacity: 0.06, rot:  28, blur: 5 }, // янтарный, размыт
 ];
 function PetalsBackground() {
   return (
     <div className="flowers-backdrop" aria-hidden="true">
       <div className="bg-blob bg-blob-1" />
       <div className="bg-blob bg-blob-2" />
-      {APP_FLOWERS.map(({ hue, size, left, top, opacity, rot }, i) => (
-        <img key={i} src={FLOWER_URL} alt="" width={size} height={size}
+      {APP_FLOWERS.map(({ img, hue, size, left, top, opacity, rot, blur }, i) => (
+        <img key={i} src={APP_FLOWER_IMGS[img]} alt="" width={size} height={size}
           style={{
             position: "absolute", left, top, width: size, height: size, opacity,
+            objectFit: "contain",
             transform: `rotate(${rot}deg)`,
-            filter: hue ? `hue-rotate(${hue}deg) saturate(1.15)` : "saturate(1.05)",
+            filter: `${hue ? `hue-rotate(${hue}deg) saturate(1.15)` : "saturate(1.05)"}${blur ? ` blur(${blur}px)` : ""}`,
           }} />
       ))}
     </div>
@@ -3963,12 +4004,9 @@ function LoadingMascot() {
 // ─── ЭКРАН ВХОДА — чистый, аккуратный; вход как в рабочем оригинале ───────────
 // Менеджер паролей: НЕ оборачиваем в <form>/action и без задержек — поля с
 // autoComplete + submit по onClick/Enter (ровно так автозаполнение работало).
-function LoginScreen({ onSuccess, onShowRegister, onBack }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [shut, setShut] = useState(false);
+// Маскот с глазами, следящими за курсором (общий для входа и регистрации).
+// shut — закрыть глаза (например, при вводе пароля).
+function MascotFigure({ shut = false }) {
   const [pupil, setPupil] = useState({ x: 0, y: 0 });
   const faceRef = useRef(null);
 
@@ -3984,6 +4022,37 @@ function LoginScreen({ onSuccess, onShowRegister, onBack }) {
     window.addEventListener("mousemove", onMove);
     return () => window.removeEventListener("mousemove", onMove);
   }, []);
+
+  // координаты глаз на персонаже (доли, выверены по картинке маскота 1024×1024)
+  const EYE = { lx: 43.5, ly: 47.5, rx: 58.8, ry: 46.6 };
+  const TRAVEL = 4;
+  const tx = pupil.x * TRAVEL, ty = pupil.y * TRAVEL;
+  const eye = (leftPct, topPct) => (
+    <span className="me-eye" style={{ left: `${leftPct}%`, top: `${topPct}%` }}>
+      <span className="me-patch" />
+      {shut ? (
+        <svg viewBox="0 0 28 16" className="me-closed"><path d="M4 6 Q14 15 24 6" /></svg>
+      ) : (
+        <span className="me-pupil" style={{ transform: `translate(${tx}px, ${ty}px)` }} />
+      )}
+    </span>
+  );
+
+  return (
+    <div className="me-figure" ref={faceRef}>
+      <img src={mascot} alt="" draggable="false" />
+      {eye(EYE.lx, EYE.ly)}
+      {eye(EYE.rx, EYE.ry)}
+    </div>
+  );
+}
+
+function LoginScreen({ onSuccess, onShowRegister, onBack }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [shut, setShut] = useState(false);
 
   // понятные сообщения вместо технических ответов Supabase
   const humanError = (msg) => {
@@ -4020,31 +4089,12 @@ function LoginScreen({ onSuccess, onShowRegister, onBack }) {
     } finally { setBusy(false); }
   };
 
-  // координаты глаз на персонаже (доли, выверены по картинке маскота 1024×1024)
-  const EYE = { lx: 43.5, ly: 47.5, rx: 58.8, ry: 46.6 };
-  const TRAVEL = 4;
-  const tx = pupil.x * TRAVEL, ty = pupil.y * TRAVEL;
-  const Eye = ({ leftPct, topPct }) => (
-    <span className="me-eye" style={{ left: `${leftPct}%`, top: `${topPct}%` }}>
-      <span className="me-patch" />
-      {shut ? (
-        <svg viewBox="0 0 28 16" className="me-closed"><path d="M4 6 Q14 15 24 6" /></svg>
-      ) : (
-        <span className="me-pupil" style={{ transform: `translate(${tx}px, ${ty}px)` }} />
-      )}
-    </span>
-  );
-
   const onEnter = (e) => { if (e.key === "Enter") submit(); };
 
   return (
     <div className="login3-wrap">
       <div className="login3-stage">
-        <div className="me-figure" ref={faceRef}>
-          <img src={mascot} alt="" draggable="false" />
-          <Eye leftPct={EYE.lx} topPct={EYE.ly} />
-          <Eye leftPct={EYE.rx} topPct={EYE.ry} />
-        </div>
+        <MascotFigure shut={shut} />
 
         <div className="login3-card">
           <h1 className="login3-title">beauty <span>helper</span></h1>
@@ -4093,7 +4143,12 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
   const [step, setStep] = useState(1);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
+  // согласия: оферта и обработка ПД обязательны, рассылка — по желанию
+  const [agreeOffer, setAgreeOffer] = useState(false);
+  const [agreePd, setAgreePd] = useState(false);
+  const [agreeAds, setAgreeAds] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -4111,6 +4166,8 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
   const sendCode = async () => {
     if (!name.trim()) { setError("Введите имя"); return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { setError("Проверьте формат почты"); return; }
+    if (!agreeOffer) { setError("Для регистрации нужно согласие с условиями Оферты"); return; }
+    if (!agreePd) { setError("Для регистрации нужно согласие на обработку персональных данных"); return; }
     setBusy(true); setError("");
     try { await sendOtp(email.trim()); setStep(2); }
     catch (e) { setError(humanError(e.message)); }
@@ -4122,12 +4179,20 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
     setBusy(true); setError("");
     try {
       await verifyOtp(email.trim(), code);
-      if (name.trim()) await updateUserName(name.trim()).catch(() => {});
+      await updateUserProfile({
+        name: name.trim(), phone: phone.trim() || null,
+        consent_offer: true, consent_pd: true, consent_ads: agreeAds,
+        consent_ts: new Date().toISOString(),
+      }).catch(() => {});
       setStep(3);
     }
     catch (e) { setError(humanError(e.message)); }
     finally { setBusy(false); }
   };
+
+  const consentLink = (href, text) => (
+    <a className="reg-consent-link" href={href} target="_blank" rel="noopener noreferrer">{text}</a>
+  );
 
   const progress = (
     <div className="reg-progress">
@@ -4138,9 +4203,7 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
   return (
     <div className="login3-wrap">
       <div className="login3-stage">
-        <div className="me-figure">
-          <img src={mascot} alt="" draggable="false" />
-        </div>
+        <MascotFigure />
 
         <div className="login3-card">
           {progress}
@@ -4150,7 +4213,7 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
               <h1 className="login3-title">Создать аккаунт</h1>
               <p className="login3-sub">Бесплатно. Без привязки карты.</p>
               <div className="reg-perks">
-                {["3 анализа состава", "Тест на тип кожи и волос", "Каталог и поиск средств"].map(t => (
+                {["7 поисков по базе средств в неделю", "3 анализа своих средств в неделю", "Краткий тест на тип кожи и волос"].map(t => (
                   <div key={t} className="reg-perk"><span className="reg-perk-dot" />{t}</div>
                 ))}
               </div>
@@ -4169,6 +4232,30 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
                   onChange={e => { setEmail(e.target.value); if (error) setError(""); }}
                   onKeyDown={e => e.key === "Enter" && sendCode()} />
               </div>
+              <div className="login3-field">
+                <label className="login3-label" htmlFor="reg-phone">Контактный телефон</label>
+                <input id="reg-phone" className="login3-input" type="tel" value={phone}
+                  autoComplete="tel" placeholder="+7 ___ ___-__-__"
+                  onChange={e => { setPhone(e.target.value); if (error) setError(""); }}
+                  onKeyDown={e => e.key === "Enter" && sendCode()} />
+              </div>
+
+              {/* юр. требование: чекбоксы пустые, отдельные, до кнопки действия */}
+              <div className="reg-consents">
+                <label className="reg-consent">
+                  <input type="checkbox" checked={agreeOffer} onChange={e => { setAgreeOffer(e.target.checked); if (error) setError(""); }} />
+                  <span>Согласен с условиями {consentLink(LEGAL.offer, "Оферты")}</span>
+                </label>
+                <label className="reg-consent">
+                  <input type="checkbox" checked={agreePd} onChange={e => { setAgreePd(e.target.checked); if (error) setError(""); }} />
+                  <span>Даю {consentLink(LEGAL.pdConsent, "согласие")} на обработку моих персональных данных в соответствии с {consentLink(LEGAL.policy, "Политикой")}</span>
+                </label>
+                <label className="reg-consent">
+                  <input type="checkbox" checked={agreeAds} onChange={e => setAgreeAds(e.target.checked)} />
+                  <span>Даю {consentLink(LEGAL.adsConsent, "согласие")} на получение специальных предложений и полезной информации</span>
+                </label>
+              </div>
+
               <button className="login3-btn" onClick={sendCode} disabled={busy}>
                 <span>{busy ? "Отправляем код…" : "Получить код подтверждения"}</span>
               </button>
@@ -4207,15 +4294,15 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
               <p className="login3-sub">Аккаунт создан. Вам доступно:</p>
               <div className="reg-perks reg-perks-free">
                 <div className="reg-perks-head">Доступно сейчас</div>
-                {["Каталог средств и поиск по базе", "Справочник 20 000+ ингредиентов",
-                  "3 анализа состава (INCI-разбор)", "Тест на тип кожи и волос", "Сравнение до 2 средств"].map(t => (
+                {["7 поисков по базе средств в неделю", "3 анализа своих средств в неделю",
+                  "Краткий тест на тип кожи и волос", "Справочник 20 000+ ингредиентов", "Сравнение до 2 средств"].map(t => (
                   <div key={t} className="reg-perk"><span className="reg-perk-check">✓</span>{t}</div>
                 ))}
               </div>
               <div className="reg-perks reg-perks-pro">
                 <div className="reg-perks-head">С подпиской (3 490 ₽/мес)</div>
-                {["Индивидуальная схема ухода для волос", "Индивидуальная схема ухода для лица",
-                  "Анализ совместимости средств", "Неограниченные анализы состава"].map(t => (
+                {["Безлимитные поиски и анализы составов", "Полный тест + подбор средств под Вас",
+                  "Индивидуальные схемы ухода: волосы и лицо", "Дневник прогресса и анализ совместимости"].map(t => (
                   <div key={t} className="reg-perk reg-perk-locked"><span className="reg-perk-lock">⊘</span>{t}</div>
                 ))}
               </div>
@@ -4231,13 +4318,51 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
   );
 }
 
+// Плашка согласия на cookie — показывается при первом заходе, до согласия.
+// Текст и механика по инструкции юриста: отдельный пустой чекбокс «даю согласие».
+function CookieConsent() {
+  const [shown, setShown] = useState(() => {
+    try { return !localStorage.getItem("bh_cookie_consent"); } catch { return true; }
+  });
+  const [agree, setAgree] = useState(false);
+  if (!shown) return null;
+
+  const accept = () => {
+    try { localStorage.setItem("bh_cookie_consent", new Date().toISOString()); } catch { /* приватный режим */ }
+    setShown(false);
+  };
+
+  return (
+    <div className="cookie-bar">
+      <div className="cookie-text">
+        Мы используем файлы cookie, чтобы обеспечивать правильную работу нашего сайта
+        и анализировать сетевой трафик. Продолжая использовать данный сайт, вы{" "}
+        <a className="reg-consent-link" href={LEGAL.pdConsent} target="_blank" rel="noopener noreferrer">соглашаетесь</a>{" "}
+        на обработку своих персональных данных в соответствии с{" "}
+        <a className="reg-consent-link" href={LEGAL.policy} target="_blank" rel="noopener noreferrer">Политикой</a>.
+      </div>
+      <label className="reg-consent cookie-agree">
+        <input type="checkbox" checked={agree} onChange={e => setAgree(e.target.checked)} />
+        <span>даю согласие</span>
+      </label>
+      <button className="btn btn-primary btn-sm" disabled={!agree} onClick={accept}>Принять</button>
+    </div>
+  );
+}
+
 // Модал покупки подписки (CloudPayments) — стиль боевых модалок.
+// Юр. требование: согласие с Офертой и на обработку ПД — отдельными пустыми
+// чекбоксами ДО кнопки «Оплатить», без них оплата невозможна.
 function PurchaseModal({ onClose, onSuccess }) {
   const [email, setEmail] = useState("");
+  const [agreeOffer, setAgreeOffer] = useState(false);
+  const [agreePd, setAgreePd] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   const pay = () => {
+    if (!agreeOffer) { setError("Для оплаты нужно согласие с условиями Оферты"); return; }
+    if (!agreePd) { setError("Для оплаты нужно согласие на обработку персональных данных"); return; }
     setBusy(true); setError("");
     openPaymentWidget({
       email,
@@ -4272,6 +4397,18 @@ function PurchaseModal({ onClose, onSuccess }) {
           <input className="form-input" type="email" value={email} placeholder="you@example.com"
             onChange={e => setEmail(e.target.value)} />
         </div>
+
+        <div className="reg-consents" style={{ marginBottom: 12 }}>
+          <label className="reg-consent">
+            <input type="checkbox" checked={agreeOffer} onChange={e => { setAgreeOffer(e.target.checked); if (error) setError(""); }} />
+            <span>Согласен с условиями <a className="reg-consent-link" href={LEGAL.offer} target="_blank" rel="noopener noreferrer">Оферты</a></span>
+          </label>
+          <label className="reg-consent">
+            <input type="checkbox" checked={agreePd} onChange={e => { setAgreePd(e.target.checked); if (error) setError(""); }} />
+            <span>Даю <a className="reg-consent-link" href={LEGAL.pdConsent} target="_blank" rel="noopener noreferrer">согласие</a> на обработку моих персональных данных в соответствии с <a className="reg-consent-link" href={LEGAL.policy} target="_blank" rel="noopener noreferrer">Политикой</a></span>
+          </label>
+        </div>
+
         {error && <div className="error-msg">{error}</div>}
         <button className="btn btn-primary" style={{ width: "100%" }} onClick={pay} disabled={busy}>
           {busy ? "Открываем оплату…" : "Оплатить 3 490 ₽"}
