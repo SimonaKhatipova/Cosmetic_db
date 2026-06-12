@@ -1414,7 +1414,10 @@ export default function App() {
   useEffect(() => {
     if (!authed) return;
     if (tab === "products") loadProducts();
-    if (tab === "ingredients") loadIngredients();
+    // справочник нужен не только вкладке «Ингредиенты»: INCI-матчер при
+    // добавлении продукта работает с любой вкладки — без него состав
+    // сохранится непривязанным (ingredient_id = null)
+    if (tab === "ingredients" || ingredients.length === 0) loadIngredients();
     if (Object.keys(subgroupDesc).length === 0) loadSubgroups();
   }, [tab, authed]);
 
@@ -2812,10 +2815,19 @@ function IngredientsTab({ data = [], loading, onOpenDetail, editorMode = false, 
 
   const problemCount = useMemo(() => data.filter(isProblem).length, [data]);
 
+  // если строка нашлась только по алиасу — вернуть этот алиас, чтобы показать его в результатах
+  const aliasHitFor = (i) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return null;
+    if ((i.inci_name || "").toLowerCase().includes(q) || (i.ru_name || "").toLowerCase().includes(q)) return null;
+    return (i.aliases || "").split("|").map(a => a.trim()).find(a => a.toLowerCase().includes(q)) || null;
+  };
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     let rows = data.filter(i => {
-      const ms = !q || (i.inci_name || "").toLowerCase().includes(q) || (i.ru_name || "").toLowerCase().includes(q);
+      const ms = !q || (i.inci_name || "").toLowerCase().includes(q) || (i.ru_name || "").toLowerCase().includes(q)
+        || (i.aliases || "").toLowerCase().includes(q);
       if (!ms) return false;
       if (filterGroup && i.group !== filterGroup) return false;
       if (filterSub && i.subgroup !== filterSub) return false;
@@ -2934,6 +2946,12 @@ function IngredientsTab({ data = [], loading, onOpenDetail, editorMode = false, 
                   <td className="td-inci">
                     <span className="inci-link" onClick={() => openCard(i)}>{i.inci_name}</span>
                     {i.is_eu_allergen && <span className="badge-eu" style={{ marginLeft: 7 }} title="Аллерген из списка EU-26">Аллерген</span>}
+                    {aliasHitFor(i) && (
+                      <div style={{ fontSize: 11, color: "var(--ink-faint)", marginTop: 2 }}
+                        title="Совпадение по альтернативному написанию этого ингредиента">
+                        найдено по алиасу: <span style={{ color: "var(--ink-soft)" }}>{aliasHitFor(i)}</span>
+                      </div>
+                    )}
                   </td>
                   <td>
                     {editorMode && editing?.id === i.id && editing?.field === "ru_name" ? (
@@ -2987,6 +3005,68 @@ function parseInciList(raw) {
   let s = raw.replace(/[;\n\r]+/g, ", ");
   s = s.replace(/,[ \t]+/g, ", ");
   return s.split(", ").map(t => t.trim()).filter(Boolean);
+}
+
+// ── INCI-матчер v2: нормализация + алиасы ────────────────────────────────────
+// Формулы 1-в-1 повторяют SQL-чистку данных v4 (plans/migration_v4/011, 013) —
+// ключ, посчитанный здесь, обязан совпадать с ключом, по которому сливались дубли.
+const HOMOGLYPHS_CYR = "авекмнорстух", HOMOGLYPHS_LAT = "abekmhopctyx";
+const fixHomoglyphs = (s) => s.replace(/[авекмнорстух]/g, c => HOMOGLYPHS_LAT[HOMOGLYPHS_CYR.indexOf(c)]);
+
+// строгий ключ: гомоглифы → "_-*"→пробел → скобки → хвост-концентрация → слэши/пробелы
+function inciKey(s) {
+  return fixHomoglyphs((s || "").toLowerCase())
+    .replace(/[_\-*]/g, " ")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\s*\d+([.,\s]\d+)*\s*(ppm|ppb|%|iu\/?g?)\s*$/i, "")
+    .replace(/\s*\/\s*/g, "/")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+// агрессивный ключ (OCR-разрывы): только [a-z0-9/], матчить при length>=4 и единственном кандидате
+function inciKeyAggressive(s) {
+  return fixHomoglyphs((s || "").toLowerCase())
+    .replace(/[_\-*]/g, "")
+    .replace(/[^ -~]/g, "")
+    .replace(/\([^)]*\)/g, "")
+    .replace(/[^a-z0-9/]/g, "");
+}
+
+// индекс справочника: ключ → ингредиент (inci_name + каждый алиас через "|")
+function buildInciIndex(ingredients) {
+  const strict = new Map();
+  const aggressive = new Map(); // null = коллизия ключа, матчить нельзя
+  for (const ing of ingredients) {
+    const names = [ing.inci_name, ...(ing.aliases ? ing.aliases.split("|") : [])];
+    for (const n of names) {
+      const k = inciKey(n);
+      if (k && !strict.has(k)) strict.set(k, ing);
+      const ak = inciKeyAggressive(n);
+      if (ak.length >= 4) {
+        const cur = aggressive.get(ak);
+        if (cur === undefined) aggressive.set(ak, ing);
+        else if (cur && cur.id !== ing.id) aggressive.set(ak, null);
+      }
+    }
+  }
+  return { strict, aggressive };
+}
+
+// exact → строгий ключ → агрессивный ключ; raw_inci_name сохраняется как есть (концентрации значимы)
+function matchInci(raw, index) {
+  const k = inciKey(raw);
+  const hit = k ? index.strict.get(k) : null;
+  if (hit) {
+    const exact = hit.inci_name?.toLowerCase() === (raw || "").trim().toLowerCase();
+    return { ing: hit, source: exact ? "exact" : "norm" };
+  }
+  const ak = inciKeyAggressive(raw);
+  if (ak.length >= 4) {
+    const a = index.aggressive.get(ak);
+    if (a) return { ing: a, source: "ocr" };
+  }
+  return null;
 }
 
 const SIZE = 1200;
@@ -3284,6 +3364,7 @@ function AddProductModal({ ingredients, onClose, onSaved, removeBgKey }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  const inciIndex = useMemo(() => buildInciIndex(ingredients), [ingredients]);
   const handlePaste = (val) => { setRawText(val); setParsed(val.trim() ? parseInciList(val) : []); };
   const removeIngredient = (idx) => setParsed(p => p.filter((_, i) => i !== idx));
   const updateIngredient = (idx, val) => setParsed(p => p.map((x, i) => i === idx ? val : x));
@@ -3300,8 +3381,11 @@ function AddProductModal({ ingredients, onClose, onSaved, removeBgKey }) {
       const inciRows = parsed.filter(r => r.trim());
       if (inciRows.length > 0) {
         const links = inciRows.map((inciName, i) => {
-          const found = ingredients.find(ing => ing.inci_name?.toLowerCase() === inciName.toLowerCase());
-          return { product_id: product.id, ingredient_id: found?.id || null, position: i + 1, raw_inci_name: inciName.trim() };
+          const m = matchInci(inciName, inciIndex);
+          return {
+            product_id: product.id, ingredient_id: m?.ing.id || null, position: i + 1,
+            raw_inci_name: inciName.trim(), match_source: m?.source || null
+          };
         });
         await sbFetch("/product_ingredients", { method: "POST", body: JSON.stringify(links) });
       }
@@ -3312,6 +3396,10 @@ function AddProductModal({ ingredients, onClose, onSaved, removeBgKey }) {
   };
 
   const realCount = parsed.filter(s => s.trim()).length;
+  const matchedCount = useMemo(
+    () => parsed.filter(s => s.trim() && matchInci(s, inciIndex)).length,
+    [parsed, inciIndex]
+  );
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -3342,7 +3430,12 @@ function AddProductModal({ ingredients, onClose, onSaved, removeBgKey }) {
           <textarea className="form-input form-textarea" style={{ minHeight: 90, fontFamily: "monospace", fontSize: 12 }}
             value={rawText} onChange={e => handlePaste(e.target.value)}
             placeholder="Centella Asiatica Extract (30%), Glycerin, 1,2-Hexanediol, Aqua..." />
-          {realCount > 0 && <div style={{ fontSize: 12, color: "var(--sage)", marginTop: 5 }}>✓ Распознано {realCount} ингредиентов</div>}
+          {realCount > 0 && (
+            <div style={{ fontSize: 12, color: "var(--sage)", marginTop: 5 }}>
+              ✓ Распознано {realCount} ингредиентов · в справочнике найдено {matchedCount}
+              {matchedCount < realCount && <span style={{ color: "var(--dust)" }}> · ненайденные сохранятся текстом</span>}
+            </div>
+          )}
         </div>
 
         {parsed.length > 0 && (
@@ -3352,12 +3445,18 @@ function AddProductModal({ ingredients, onClose, onSaved, removeBgKey }) {
               <span style={{ fontWeight: 400, color: "var(--dust)", textTransform: "none", letterSpacing: 0, fontSize: 11 }}>+ между строками — вставить новую</span>
             </label>
             <div style={{ maxHeight: 300, overflowY: "auto", border: "1px solid var(--sand)", borderRadius: 8, padding: "4px 8px" }}>
-              {parsed.map((ing, idx) => (
+              {parsed.map((ing, idx) => {
+                const m = ing.trim() ? matchInci(ing, inciIndex) : null;
+                return (
                 <div key={idx}>
                   <div className="ing-add-row">
                     <span style={{ fontSize: 11, color: "var(--dust)", width: 22, textAlign: "right", flexShrink: 0 }}>{idx + 1}</span>
                     <input className="form-input" style={{ flex: 1, padding: "6px 10px", fontSize: 13, borderColor: ing.trim() ? "" : "var(--rose)" }}
                       value={ing} onChange={e => updateIngredient(idx, e.target.value)} placeholder="Название компонента" />
+                    <span title={m ? `Найден в справочнике: ${m.ing.inci_name}${m.ing.ru_name ? ` · ${m.ing.ru_name}` : ""}` : ing.trim() ? "Не найден в справочнике — сохранится текстом" : ""}
+                      style={{ width: 16, textAlign: "center", flexShrink: 0, fontSize: 12, cursor: "default", color: m ? "var(--sage)" : "var(--dust)" }}>
+                      {m ? "✓" : ing.trim() ? "?" : ""}
+                    </span>
                     <button className="ing-remove" onClick={() => removeIngredient(idx)}>×</button>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "1px 0 1px 28px" }}>
@@ -3367,7 +3466,8 @@ function AddProductModal({ ingredients, onClose, onSaved, removeBgKey }) {
                     <div style={{ flex: 1, height: "0.5px", background: "var(--warm)" }} />
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
