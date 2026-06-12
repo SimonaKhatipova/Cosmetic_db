@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import mascot from "./assets/mascot.png";
+import Landing from "./Landing.jsx";
+import { openPaymentWidget } from "./lib/cloudpayments.js";
 
 const SUPABASE_URL = "https://lcvszvxbszszqikboxeq.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxjdnN6dnhic3pzenFpa2JveGVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMDAyOTEsImV4cCI6MjA5NDY3NjI5MX0.W3yfYh9WWHv_7pBzAh5dTafDr8uOkWTc6LAIZLxCkAE";
@@ -113,6 +115,34 @@ async function signIn(email, password) {
 function signOut() {
   ACCESS_TOKEN = null;
   try { localStorage.removeItem("sb_token"); } catch {}
+}
+
+// Регистрация через одноразовый код на почту (Supabase email-OTP).
+// ВАЖНО: шаблон письма «Magic Link» в Supabase Dashboard должен содержать {{ .Token }},
+// иначе пользователю придёт ссылка без 6-значного кода.
+async function sendOtp(email) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/otp`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, create_user: true })
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.error_description || data?.msg || "Не удалось отправить код");
+  }
+}
+
+async function verifyOtp(email, token) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "email", email, token })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error_description || data?.msg || "Неверный код");
+  ACCESS_TOKEN = data.access_token;
+  try { localStorage.setItem("sb_token", data.access_token); } catch { /* localStorage недоступен */ }
+  return data;
 }
 
 // Проверка сохранённого токена при загрузке
@@ -335,6 +365,16 @@ const styles = `
     --rose: #c17b8a;
     --warn: #c98a3a;
     --danger: #c0584f;
+
+    /* алиасы старой палитры: инлайн-стили admin-модалок ссылаются на них,
+       при переходе на v6 переменные пропали — маппим на новые токены */
+    --sage: var(--accent);
+    --dust: var(--ink-faint);
+    --sand: rgba(60,110,88,0.25);
+    --gold: var(--accent);
+    --brown: var(--ink-soft);
+    --deep: var(--ink);
+    --cream: #f6f9f7;
   }
 
   body { font-family: 'Manrope', sans-serif; color: var(--ink); }
@@ -1252,6 +1292,121 @@ const styles = `
     border-radius: 10px; padding: 9px 12px; font-size: 12.5px; margin-bottom: 12px; text-align: center;
   }
 
+  /* ── Admin-модалки и формы: стили потерялись при переходе на UI v6, восстановлены ── */
+  .modal-overlay {
+    position: fixed; inset: 0; z-index: 300;
+    background: rgba(20,40,32,0.45); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: clamp(1rem, 4vh, 3rem) 1rem; overflow-y: auto;
+  }
+  .modal-overlay .modal {
+    position: relative; max-width: 560px; margin: auto; padding: 26px 26px 22px;
+    background: linear-gradient(160deg, rgba(247,252,251,0.96), rgba(233,243,239,0.94));
+    border: 1px solid rgba(15,107,77,0.2); border-radius: 22px;
+    backdrop-filter: blur(24px) saturate(150%); -webkit-backdrop-filter: blur(24px) saturate(150%);
+    box-shadow: 0 24px 56px -20px rgba(10,74,53,0.4);
+    overflow: visible;
+  }
+  .form-group { margin-bottom: 1.1rem; }
+  .form-label {
+    display: block; margin-bottom: 6px;
+    font-size: 11px; font-weight: 700; color: var(--ink-faint);
+    text-transform: uppercase; letter-spacing: .07em;
+  }
+  .form-input {
+    width: 100%; padding: 10px 14px; box-sizing: border-box;
+    border: 1.5px solid var(--line); border-radius: 10px;
+    font-size: 14px; font-family: 'Manrope', sans-serif; color: var(--ink);
+    background: rgba(255,255,255,0.8); outline: none; transition: border-color .2s;
+  }
+  .form-input:focus { border-color: var(--accent); }
+  .form-textarea { min-height: 80px; resize: vertical; }
+  .error-msg {
+    background: rgba(192,82,74,0.1); color: #a8463d; border: 1px solid rgba(192,82,74,0.28);
+    border-radius: 10px; padding: 9px 12px; font-size: 13px; margin-bottom: 12px;
+  }
+  .btn-ghost { background: rgba(255,255,255,0.55); border: 1px solid var(--line); color: var(--ink-soft); }
+  .btn-ghost:hover { background: rgba(255,255,255,0.85); }
+  .ing-add-row { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+  .ing-remove {
+    background: none; border: none; cursor: pointer;
+    color: var(--ink-faint); font-size: 17px; padding: 0 4px;
+  }
+  .ing-remove:hover { color: var(--danger); }
+
+  /* ── ссылки под формой входа/регистрации ── */
+  .login3-links {
+    margin-top: 14px; display: flex; flex-direction: column; gap: 7px;
+    font-size: 13px; color: var(--ink-faint); text-align: center;
+  }
+  .login3-link {
+    background: none; border: none; cursor: pointer; padding: 0;
+    font-size: 13px; font-weight: 700; color: var(--accent);
+  }
+  .login3-link:hover { text-decoration: underline; }
+  .login3-link-muted { font-weight: 600; color: var(--ink-faint); }
+
+  /* ── регистрация: прогресс и списки возможностей ── */
+  .reg-progress { display: flex; gap: 4px; margin-bottom: 18px; }
+  .reg-progress-seg {
+    flex: 1; height: 3px; border-radius: 2px; background: rgba(60,110,88,0.15);
+    transition: background .3s;
+  }
+  .reg-progress-seg.on { background: var(--accent); }
+  .reg-perks {
+    background: rgba(15,107,77,0.06); border: 1px solid rgba(15,107,77,0.14);
+    border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; text-align: left;
+  }
+  .reg-perks-head {
+    font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 8px;
+  }
+  .reg-perks-pro { background: rgba(255,255,255,0.4); border-color: rgba(60,110,88,0.14); }
+  .reg-perks-pro .reg-perks-head { color: var(--ink-faint); }
+  .reg-perk {
+    display: flex; align-items: center; gap: 9px;
+    font-size: 13px; color: var(--ink-soft); margin-bottom: 6px;
+  }
+  .reg-perk:last-child { margin-bottom: 0; }
+  .reg-perk-locked { color: var(--ink-faint); opacity: .75; }
+  .reg-perk-dot { width: 5px; height: 5px; border-radius: 2px; background: var(--accent); flex-shrink: 0; }
+  .reg-perk-check {
+    width: 16px; height: 16px; border-radius: 5px; background: var(--accent); color: #fff;
+    font-size: 9px; font-weight: 800; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .reg-perk-lock {
+    width: 16px; height: 16px; border-radius: 5px; border: 1.5px solid rgba(60,110,88,0.25);
+    font-size: 9px; color: var(--ink-faint); display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .reg-code-input { font-size: 22px; letter-spacing: .35em; text-align: center; font-weight: 700; }
+  .reg-btn-outline {
+    width: 100%; margin-top: 9px; padding: 12px; border-radius: 12px; cursor: pointer;
+    background: transparent; color: var(--accent); border: 1.5px solid var(--accent);
+    font-weight: 600; font-size: 14px;
+  }
+  .reg-btn-outline:hover { background: rgba(15,107,77,0.06); }
+
+  /* ── модал покупки и тост ── */
+  .purchase-head {
+    background: linear-gradient(135deg, rgba(10,74,53,0.92), rgba(15,107,77,0.95));
+    border-radius: 16px; padding: 20px 22px; margin-bottom: 18px;
+  }
+  .purchase-head-label {
+    font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.55);
+    letter-spacing: .1em; text-transform: uppercase; margin-bottom: 7px;
+  }
+  .purchase-head-price {
+    font-family: 'Playfair Display', serif; font-size: 32px; font-weight: 700; color: #fff;
+  }
+  .purchase-head-price span { font-size: 15px; font-weight: 500; opacity: .6; }
+  .purchase-note { margin-top: 11px; text-align: center; font-size: 12px; color: var(--ink-faint); }
+  .purchase-toast {
+    position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%);
+    z-index: 600; background: #0a4a35; color: #fff; font-weight: 600; font-size: 14px;
+    padding: 14px 28px; border-radius: 14px; box-shadow: 0 8px 28px rgba(10,74,53,0.4);
+    white-space: nowrap;
+  }
+
 `;
 
 
@@ -1303,6 +1458,14 @@ const COMPO_SELECT =
 export default function App() {
   const [authed, setAuthed] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
+  // флоу до входа: лендинг → вход / регистрация; покупка — модалкой поверх
+  const [authScreen, setAuthScreen] = useState("landing"); // landing | login | register
+  const [showPurchase, setShowPurchase] = useState(false);
+  const [purchaseToast, setPurchaseToast] = useState(false);
+  const purchaseDone = () => {
+    setShowPurchase(false); setPurchaseToast(true);
+    setTimeout(() => setPurchaseToast(false), 3000);
+  };
   const [tab, setTab] = useState("products");
   const [products, setProducts] = useState([]);       // адаптированные (без составов)
   const [ingredients, setIngredients] = useState([]); // справочник (form v6)
@@ -1593,11 +1756,37 @@ export default function App() {
   const productTypes = opt.types;
 
   if (!authChecked) return (<><style>{styles}</style><div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(168deg,#eef5f3,#e0eeea)" }}><div className="loading-dots"><span /><span /><span /></div></div></>);
-  if (!authed) return (<><style>{styles}</style><LoginScreen onSuccess={() => setAuthed(true)} /></>);
+  if (!authed) return (
+    <>
+      <style>{styles}</style>
+      {authScreen === "landing" && (
+        <Landing
+          onLogin={() => setAuthScreen("login")}
+          onRegister={() => setAuthScreen("register")}
+          onPurchase={() => setShowPurchase(true)}
+        />
+      )}
+      {authScreen === "login" && (
+        <LoginScreen onSuccess={() => setAuthed(true)}
+          onShowRegister={() => setAuthScreen("register")}
+          onBack={() => setAuthScreen("landing")} />
+      )}
+      {authScreen === "register" && (
+        <RegisterScreen onSuccess={() => setAuthed(true)}
+          onShowLogin={() => setAuthScreen("login")}
+          onBack={() => setAuthScreen("landing")}
+          onPurchase={() => { setAuthed(true); setShowPurchase(true); }} />
+      )}
+      {showPurchase && <PurchaseModal onClose={() => setShowPurchase(false)} onSuccess={purchaseDone} />}
+      {purchaseToast && <div className="purchase-toast">Подписка оформлена</div>}
+    </>
+  );
 
   return (
     <>
       <style>{styles}</style>
+      {showPurchase && <PurchaseModal onClose={() => setShowPurchase(false)} onSuccess={purchaseDone} />}
+      {purchaseToast && <div className="purchase-toast">Подписка оформлена</div>}
       <div className="app">
         <PetalsBackground />
         <div className="topbar">
@@ -1665,7 +1854,7 @@ export default function App() {
             {editorMode && tab === "products" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddProduct(true)}>+ Средство</button>}
             {editorMode && tab === "ingredients" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddIngredient(true)}>+ Ингредиент</button>}
             <button className="btn btn-glass btn-sm" onClick={() => setShowSettings(s => !s)} title="Настройки">⚙</button>
-            <button className="btn btn-glass btn-sm" onClick={() => { signOut(); setAuthed(false); }}>Выйти</button>
+            <button className="btn btn-glass btn-sm" onClick={() => { signOut(); setAuthed(false); setAuthScreen("landing"); setShowPurchase(false); }}>Выйти</button>
           </div>
         </div>
 
@@ -3647,7 +3836,7 @@ function LoadingMascot() {
 // ─── ЭКРАН ВХОДА — чистый, аккуратный; вход как в рабочем оригинале ───────────
 // Менеджер паролей: НЕ оборачиваем в <form>/action и без задержек — поля с
 // autoComplete + submit по onClick/Enter (ровно так автозаполнение работало).
-function LoginScreen({ onSuccess }) {
+function LoginScreen({ onSuccess, onShowRegister, onBack }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -3754,7 +3943,200 @@ function LoginScreen({ onSuccess }) {
           <button className="login3-btn" onClick={submit} disabled={busy}>
             <span>{busy ? "Заходим…" : "Войти"}</span>
           </button>
+
+          {(onShowRegister || onBack) && (
+            <div className="login3-links">
+              {onShowRegister && (
+                <div>Нет аккаунта? <button className="login3-link" onClick={onShowRegister}>Зарегистрироваться</button></div>
+              )}
+              {onBack && (
+                <button className="login3-link login3-link-muted" onClick={onBack}>← На главную</button>
+              )}
+            </div>
+          )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Регистрация: 3 шага (email → код из письма → онбординг), реальный Supabase email-OTP.
+// Стиль — боевой login3 (как LoginScreen), функции перенесены из дизайн-прототипа DesignPreview.
+function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
+  const [step, setStep] = useState(1);
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const humanError = (msg) => {
+    const m = (msg || "").toLowerCase();
+    if (m.includes("rate") || m.includes("too many") || m.includes("limit") || m.includes("seconds"))
+      return "Слишком много попыток. Попробуйте чуть позже";
+    if (m.includes("invalid") || m.includes("expired") || m.includes("token"))
+      return "Код не подошёл. Проверьте цифры или запросите новый";
+    if (m.includes("network") || m.includes("fetch"))
+      return "Нет соединения. Проверьте интернет";
+    return msg || "Что-то пошло не так. Попробуйте ещё раз";
+  };
+
+  const sendCode = async () => {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { setError("Проверьте формат почты"); return; }
+    setBusy(true); setError("");
+    try { await sendOtp(email.trim()); setStep(2); }
+    catch (e) { setError(humanError(e.message)); }
+    finally { setBusy(false); }
+  };
+
+  const verify = async () => {
+    if (code.length < 6) { setError("Введите 6 цифр из письма"); return; }
+    setBusy(true); setError("");
+    try { await verifyOtp(email.trim(), code); setStep(3); }
+    catch (e) { setError(humanError(e.message)); }
+    finally { setBusy(false); }
+  };
+
+  const progress = (
+    <div className="reg-progress">
+      {[1, 2, 3].map(s => <div key={s} className={`reg-progress-seg ${s <= step ? "on" : ""}`} />)}
+    </div>
+  );
+
+  return (
+    <div className="login3-wrap">
+      <div className="login3-stage">
+        <div className="me-figure">
+          <img src={mascot} alt="" draggable="false" />
+        </div>
+
+        <div className="login3-card">
+          {progress}
+
+          {step === 1 && (
+            <>
+              <h1 className="login3-title">Создать аккаунт</h1>
+              <p className="login3-sub">Бесплатно. Без привязки карты.</p>
+              <div className="reg-perks">
+                {["3 анализа состава", "Тест на тип кожи и волос", "Каталог и поиск средств"].map(t => (
+                  <div key={t} className="reg-perk"><span className="reg-perk-dot" />{t}</div>
+                ))}
+              </div>
+              {error && <div className="login3-error">{error}</div>}
+              <div className="login3-field">
+                <label className="login3-label" htmlFor="reg-email">Почта</label>
+                <input id="reg-email" className="login3-input" type="email" value={email}
+                  autoComplete="email" placeholder="you@example.com" autoFocus
+                  onChange={e => { setEmail(e.target.value); if (error) setError(""); }}
+                  onKeyDown={e => e.key === "Enter" && sendCode()} />
+              </div>
+              <button className="login3-btn" onClick={sendCode} disabled={busy}>
+                <span>{busy ? "Отправляем код…" : "Получить код подтверждения"}</span>
+              </button>
+              <div className="login3-links">
+                <div>Уже есть аккаунт? <button className="login3-link" onClick={onShowLogin}>Войти</button></div>
+                {onBack && <button className="login3-link login3-link-muted" onClick={onBack}>← На главную</button>}
+              </div>
+            </>
+          )}
+
+          {step === 2 && (
+            <>
+              <h1 className="login3-title">Проверьте почту</h1>
+              <p className="login3-sub">Мы отправили 6-значный код на<br /><b>{email}</b></p>
+              {error && <div className="login3-error">{error}</div>}
+              <div className="login3-field">
+                <label className="login3-label" htmlFor="reg-code">Код из письма</label>
+                <input id="reg-code" className="login3-input reg-code-input" type="text" inputMode="numeric"
+                  value={code} placeholder="123456" autoFocus
+                  onChange={e => { setCode(e.target.value.replace(/\D/g, "").slice(0, 6)); if (error) setError(""); }}
+                  onKeyDown={e => e.key === "Enter" && verify()} />
+              </div>
+              <button className="login3-btn" onClick={verify} disabled={busy}>
+                <span>{busy ? "Проверяем код…" : "Подтвердить"}</span>
+              </button>
+              <div className="login3-links">
+                <div>Не получили письмо? <button className="login3-link" onClick={() => { setStep(1); setCode(""); setError(""); }}>Отправить повторно</button></div>
+                <button className="login3-link login3-link-muted" onClick={() => setStep(1)}>← Назад</button>
+              </div>
+            </>
+          )}
+
+          {step === 3 && (
+            <>
+              <h1 className="login3-title">Добро пожаловать!</h1>
+              <p className="login3-sub">Аккаунт создан. Вам доступно:</p>
+              <div className="reg-perks reg-perks-free">
+                <div className="reg-perks-head">Доступно сейчас</div>
+                {["Каталог средств и поиск по базе", "Справочник 20 000+ ингредиентов",
+                  "3 анализа состава (INCI-разбор)", "Тест на тип кожи и волос", "Сравнение до 2 средств"].map(t => (
+                  <div key={t} className="reg-perk"><span className="reg-perk-check">✓</span>{t}</div>
+                ))}
+              </div>
+              <div className="reg-perks reg-perks-pro">
+                <div className="reg-perks-head">С подпиской (3 490 ₽/мес)</div>
+                {["Индивидуальная схема ухода для волос", "Индивидуальная схема ухода для лица",
+                  "Анализ совместимости средств", "Неограниченные анализы состава"].map(t => (
+                  <div key={t} className="reg-perk reg-perk-locked"><span className="reg-perk-lock">⊘</span>{t}</div>
+                ))}
+              </div>
+              <button className="login3-btn" onClick={onSuccess}>
+                <span>Начать пользоваться</span>
+              </button>
+              <button className="reg-btn-outline" onClick={onPurchase}>Оформить подписку</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Модал покупки подписки (CloudPayments) — стиль боевых модалок.
+function PurchaseModal({ onClose, onSuccess }) {
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const pay = () => {
+    setBusy(true); setError("");
+    openPaymentWidget({
+      email,
+      invoiceId: `bh-${Date.now()}`,
+      onSuccess: () => { setBusy(false); onSuccess(); },
+      onFail: (reason) => {
+        setBusy(false);
+        if (reason === "no_public_id") setError("CloudPayments не настроен: добавьте VITE_CLOUDPAYMENTS_PUBLIC_ID в .env");
+        else if (reason === "script_not_loaded") setError("Не загрузился виджет оплаты. Обновите страницу");
+        else if (reason && reason !== "User has cancelled") setError("Ошибка оплаты. Попробуйте ещё раз");
+      },
+    });
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 420 }} onClick={e => e.stopPropagation()}>
+        <button className="modal-close" onClick={onClose}>✕</button>
+        <div className="purchase-head">
+          <div className="purchase-head-label">Подписка Beauty Helper</div>
+          <div className="purchase-head-price">3 490 ₽ <span>/ мес</span></div>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Включено</label>
+          {["Персональная схема ухода для лица", "Персональная схема ухода для волос",
+            "Анализ совместимости средств", "Неограниченные анализы состава", "Сравнение до 5 средств"].map(t => (
+            <div key={t} className="reg-perk"><span className="reg-perk-dot" />{t}</div>
+          ))}
+        </div>
+        <div className="form-group">
+          <label className="form-label">Email для чека</label>
+          <input className="form-input" type="email" value={email} placeholder="you@example.com"
+            onChange={e => setEmail(e.target.value)} />
+        </div>
+        {error && <div className="error-msg">{error}</div>}
+        <button className="btn btn-primary" style={{ width: "100%" }} onClick={pay} disabled={busy}>
+          {busy ? "Открываем оплату…" : "Оплатить 3 490 ₽"}
+        </button>
+        <div className="purchase-note">Оплата через CloudPayments · Отмена в любой момент</div>
       </div>
     </div>
   );
