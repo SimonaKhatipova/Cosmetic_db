@@ -104,7 +104,9 @@ CREATE POLICY "admin write subgroups" ON public.subgroups
   WITH CHECK (auth.uid() = 'e2a23384-758a-4096-a456-24ed24f31eaf'::uuid);
 
 -- ── служебная definer-функция не должна вызываться с клиента ──
-REVOKE EXECUTE ON FUNCTION public.rls_auto_enable() FROM anon, authenticated;
+-- ВАЖНО: EXECUTE по умолчанию выдан роли PUBLIC, поэтому отзыв только у
+-- anon/authenticated не помогает (они наследуют право от PUBLIC). Отзываем у PUBLIC.
+REVOKE EXECUTE ON FUNCTION public.rls_auto_enable() FROM PUBLIC, anon, authenticated;
 
 -- ── views: уважать права читателя, а не создателя (SECURITY INVOKER) ──
 ALTER VIEW public.v_ingredient_groups_with_desc SET (security_invoker = on);

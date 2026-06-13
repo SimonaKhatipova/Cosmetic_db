@@ -11,11 +11,23 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 let ACCESS_TOKEN = null;
 // Профиль вошедшего пользователя (объект user из Supabase Auth).
 let CURRENT_USER = null;
+// Тариф пользователя из таблицы public.profiles (server-authoritative, не из
+// user_metadata — его пользователь правит сам). { tariff, pro_until } | null.
+let CURRENT_PROFILE = null;
 const userName = () => CURRENT_USER?.user_metadata?.name || null;
 // Владелец проекта: только ему доступен режим редактора (запись в БД
 // дополнительно закрыта RLS-политиками — см. plans/security_rls_lockdown.sql).
 const ADMIN_EMAIL = "simonakhatipova@gmail.com";
 const isAdmin = () => CURRENT_USER?.email === ADMIN_EMAIL;
+
+// Лимиты бесплатного тарифа (как на лендинге).
+const FREE_LIMITS = { search: 7, analysis: 3, compare: 2 };
+const PRO_LIMITS = { compare: 5 };
+// pro = админ-владелец, либо активная подписка в profiles.
+const isPro = () => isAdmin() ||
+  (CURRENT_PROFILE?.tariff === "pro" &&
+    (!CURRENT_PROFILE.pro_until || new Date(CURRENT_PROFILE.pro_until) > new Date()));
+const compareLimit = () => (isPro() ? PRO_LIMITS.compare : FREE_LIMITS.compare);
 
 function authHeaders() {
   return {
@@ -124,6 +136,7 @@ async function signIn(email, password) {
 function signOut() {
   ACCESS_TOKEN = null;
   CURRENT_USER = null;
+  CURRENT_PROFILE = null;
   try { localStorage.removeItem("sb_token"); } catch {}
 }
 
@@ -194,6 +207,42 @@ async function updateUserProfile(data) {
   CURRENT_USER = CURRENT_USER
     ? { ...CURRENT_USER, user_metadata: { ...CURRENT_USER.user_metadata, ...data } }
     : { user_metadata: { ...data } };
+}
+
+// Тариф из public.profiles. Безопасно деградирует (нет строки/таблицы → free),
+// чтобы приложение работало даже до применения схемы freemium.
+async function loadProfile() {
+  if (!CURRENT_USER?.id) { CURRENT_PROFILE = null; return null; }
+  try {
+    const rows = await sbFetch(`/profiles?id=eq.${CURRENT_USER.id}&select=tariff,pro_until`);
+    CURRENT_PROFILE = rows[0] || { tariff: "free", pro_until: null };
+  } catch { CURRENT_PROFILE = { tariff: "free", pro_until: null }; }
+  return CURRENT_PROFILE;
+}
+
+// Счётчики использования за последние 7 дней: { search, analysis }.
+async function loadUsage() {
+  if (!CURRENT_USER?.id) return { search: 0, analysis: 0 };
+  const since = new Date(Date.now() - 7 * 864e5).toISOString();
+  try {
+    const rows = await sbFetch(
+      `/usage_events?user_id=eq.${CURRENT_USER.id}&created_at=gte.${since}&select=kind`);
+    return {
+      search: rows.filter(r => r.kind === "search").length,
+      analysis: rows.filter(r => r.kind === "analysis").length,
+    };
+  } catch { return { search: 0, analysis: 0 }; }
+}
+
+// Залогировать использование (fire-and-forget). Pro и владелец не логируются.
+async function logUsage(kind) {
+  if (!CURRENT_USER?.id || isPro()) return;
+  try {
+    await sbFetch(`/usage_events`, {
+      method: "POST",
+      body: JSON.stringify({ user_id: CURRENT_USER.id, kind }),
+    });
+  } catch { /* лимиты мягкие — сбой логирования не критичен */ }
 }
 
 
@@ -732,6 +781,85 @@ const styles = `
     .products-layout { display: block; }
     .filter-sidebar { display: none; }
   }
+
+  /* ── Freemium: кнопка профиля в шапке, личный кабинет, paywall ── */
+  .profile-btn { display: inline-flex; align-items: center; gap: 7px; padding-left: 7px; }
+  .profile-ava {
+    width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+    background: var(--accent); color: #fff; font-size: 11px; font-weight: 800;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .tariff-pill {
+    font-size: 9px; font-weight: 800; letter-spacing: .06em; padding: 2px 6px; border-radius: 100px;
+    background: rgba(255,255,255,0.16); color: #eef4f1; border: 1px solid rgba(255,255,255,0.28);
+  }
+  .tariff-pill.pro { background: linear-gradient(120deg,#caa24a,#e7c878); color: #3a2c08; border: none; }
+
+  .lk-overlay { display: flex; align-items: flex-start; justify-content: center; padding: clamp(1rem, 5vh, 3.5rem) 16px 40px; }
+  .lk-card {
+    position: relative; width: min(440px, 92vw); max-height: 90vh; overflow-y: auto;
+    background: var(--glass-strong); border: 1px solid var(--glass-border);
+    backdrop-filter: blur(26px) saturate(150%); -webkit-backdrop-filter: blur(26px) saturate(150%);
+    border-radius: 24px; padding: 26px 24px; box-shadow: 0 30px 80px rgba(15,50,40,0.28);
+  }
+  .lk-close {
+    position: absolute; top: 14px; right: 14px; width: 30px; height: 30px; border-radius: 50%;
+    border: none; background: rgba(0,0,0,0.05); color: var(--ink-soft); font-size: 14px; cursor: pointer;
+  }
+  .lk-close:hover { background: rgba(0,0,0,0.1); }
+  .lk-head { display: flex; align-items: center; gap: 13px; margin-bottom: 20px; }
+  .lk-ava {
+    width: 50px; height: 50px; border-radius: 50%; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--accent), var(--accent-deep)); color: #fff;
+    font-size: 21px; font-weight: 800; display: flex; align-items: center; justify-content: center;
+  }
+  .lk-name { font-family: 'Familjen Grotesk', sans-serif; font-size: 19px; font-weight: 700; color: var(--ink); letter-spacing: -0.02em; }
+  .lk-email { font-size: 12.5px; color: var(--ink-faint); }
+  .lk-tariff {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    border: 1px solid var(--glass-border); border-radius: 16px; padding: 14px 16px; margin-bottom: 18px;
+  }
+  .lk-tariff.pro { background: linear-gradient(120deg, rgba(202,162,74,0.14), rgba(231,200,120,0.1)); border-color: rgba(202,162,74,0.4); }
+  .lk-tariff-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; color: var(--ink-faint); }
+  .lk-tariff-val { font-size: 16px; font-weight: 700; color: var(--ink); }
+  .lk-tariff-until { font-size: 11.5px; color: var(--accent-deep); margin-top: 2px; }
+  .lk-section-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; font-weight: 800; color: var(--ink-faint); margin-bottom: 10px; }
+  .lk-meters { margin-bottom: 18px; }
+  .lk-meter { margin-bottom: 12px; }
+  .lk-meter-top { display: flex; justify-content: space-between; font-size: 13px; color: var(--ink-soft); margin-bottom: 5px; }
+  .lk-meter-top .over { color: var(--rose); font-weight: 700; }
+  .lk-meter-bar { height: 7px; border-radius: 100px; background: rgba(0,0,0,0.07); overflow: hidden; }
+  .lk-meter-fill { height: 100%; border-radius: 100px; transition: width .3s ease; }
+  .lk-hint { font-size: 11.5px; color: var(--ink-faint); margin-top: 4px; line-height: 1.5; }
+  .lk-info { border-top: 1px solid var(--glass-border); padding-top: 16px; margin-bottom: 16px; }
+  .lk-row { display: flex; justify-content: space-between; font-size: 13.5px; padding: 5px 0; color: var(--ink-soft); }
+  .lk-row b { color: var(--ink); font-weight: 600; }
+  .lk-docs { display: flex; gap: 16px; margin-bottom: 14px; }
+  .lk-docs a { font-size: 12.5px; color: var(--ink-faint); text-decoration: none; }
+  .lk-docs a:hover { color: var(--accent); text-decoration: underline; }
+  .lk-logout {
+    width: 100%; padding: 11px; border-radius: 12px; cursor: pointer;
+    background: none; border: 1px solid var(--glass-border); color: var(--rose);
+    font-family: inherit; font-size: 13.5px; font-weight: 600;
+  }
+  .lk-logout:hover { background: rgba(192,82,74,0.08); }
+
+  .paywall-card {
+    width: min(400px, 92vw); text-align: center;
+    background: var(--glass-strong); border: 1px solid var(--glass-border);
+    backdrop-filter: blur(26px) saturate(150%); -webkit-backdrop-filter: blur(26px) saturate(150%);
+    border-radius: 24px; padding: 28px 26px; box-shadow: 0 30px 80px rgba(15,50,40,0.28);
+  }
+  .paywall-emoji { font-size: 40px; margin-bottom: 8px; }
+  .paywall-title { font-family: 'Familjen Grotesk', sans-serif; font-size: 21px; font-weight: 700; color: var(--ink); margin: 0 0 8px; letter-spacing: -0.02em; }
+  .paywall-body { font-size: 14px; color: var(--ink-soft); line-height: 1.6; margin: 0 0 18px; }
+  .paywall-list { list-style: none; padding: 0; margin: 0 0 22px; text-align: left; display: flex; flex-direction: column; gap: 9px; }
+  .paywall-list li { font-size: 13.5px; color: var(--ink-soft); padding-left: 26px; position: relative; }
+  .paywall-list li::before { content: "✓"; position: absolute; left: 4px; color: var(--accent); font-weight: 800; }
+  .paywall-card .btn-primary { width: 100%; }
+  .paywall-later { background: none; border: none; cursor: pointer; color: var(--ink-faint); font-family: inherit; font-size: 13px; margin-top: 10px; padding: 6px; }
+  .paywall-later:hover { color: var(--ink-soft); text-decoration: underline; }
 
   .filter-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
   .chip {
@@ -1647,18 +1775,28 @@ export default function App() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [removeBgKey, setRemoveBgKey] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  // freemium: тариф, использование за неделю, экран кабинета, paywall (причина|null)
+  const [profile, setProfile] = useState(null);
+  const [usage, setUsage] = useState({ search: 0, analysis: 0 });
+  const [showProfile, setShowProfile] = useState(false);
+  const [paywall, setPaywall] = useState(null);
+  // локальный инкремент + лог; gate: бесплатнику сверх лимита — false и paywall
+  const bumpUsage = (kind) => { logUsage(kind); setUsage(u => ({ ...u, [kind]: (u[kind] || 0) + 1 })); };
+  const overLimit = (kind) => !isPro() && (usage[kind] || 0) >= FREE_LIMITS[kind];
   // Роли: «Редактор» (правка данных) и «Пользователь» (только просмотр).
   // По умолчанию — просмотр. Переключатель в шапке включает режим редактора.
   const [editorMode, setEditorMode] = useState(false);
-  // корзина сравнения: до 5 средств. Храним продукты целиком.
-  const COMPARE_MAX = 5;
+  // корзина сравнения: до 2 (free) / 5 (pro), лимит из compareLimit(). Храним продукты целиком.
   const [compareItems, setCompareItems] = useState([]);
   const [compareMsg, setCompareMsg] = useState("");
   const addProductToCompare = (product) => {
     setCompareItems(prev => {
       if (prev.some(p => p.id === product.id)) return prev;
-      if (prev.length >= COMPARE_MAX) {
-        setCompareMsg("Добавлено максимальное количество средств для сравнения");
+      const lim = compareLimit();
+      if (prev.length >= lim) {
+        // бесплатно сравнение до 2 — дальше paywall; pro до 5
+        if (!isPro()) setPaywall("compare");
+        else setCompareMsg("Добавлено максимальное количество средств для сравнения");
         return prev;
       }
       setCompareMsg("");
@@ -1671,8 +1809,27 @@ export default function App() {
   const goCompare = () => { setDetail(null); setSelected(null); setTab("compare"); };
 
   useEffect(() => { restoreSession().then(ok => { setAuthed(ok); setAuthChecked(true); }); }, []);
-  // факт cookie-согласия привязываем к аккаунту после входа
-  useEffect(() => { if (authed) syncCookieConsent(); }, [authed]);
+  // после входа: cookie-согласие в профиль, тариф и счётчики использования
+  useEffect(() => {
+    if (!authed) return;
+    syncCookieConsent();
+    loadProfile().then(p => setProfile(p));
+    loadUsage().then(setUsage);
+  }, [authed]);
+
+  // Учёт поиска: одна «единица» за устоявшийся уникальный запрос (с дебаунсом),
+  // не за каждый символ. Бесплатнику сверх недельного лимита — paywall.
+  const lastSearchRef = useRef("");
+  useEffect(() => {
+    const q = search.trim().toLowerCase();
+    if (!authed || q.length < 2 || q === lastSearchRef.current) return;
+    const t = setTimeout(() => {
+      if (overLimit("search")) { setPaywall("search"); setSearch(""); return; }
+      lastSearchRef.current = q;
+      bumpUsage("search");
+    }, 700);
+    return () => clearTimeout(t);
+  }, [search, authed]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadProducts = useCallback(async () => {
     setLoading(true); setError("");
@@ -2024,6 +2181,17 @@ export default function App() {
       <style>{styles}</style>
       {showPurchase && <PurchaseModal onClose={() => setShowPurchase(false)} onSuccess={purchaseDone} />}
       {purchaseToast && <div className="purchase-toast">Подписка оформлена</div>}
+      {showProfile && (
+        <ProfileScreen profile={profile} usage={usage} pro={isPro()}
+          onClose={() => setShowProfile(false)}
+          onSubscribe={() => { setShowProfile(false); setShowPurchase(true); }}
+          onLogout={() => { signOut(); setAuthed(false); setShowProfile(false); setAuthScreen("landing"); setShowPurchase(false); }} />
+      )}
+      {paywall && (
+        <Paywall reason={paywall}
+          onClose={() => setPaywall(null)}
+          onSubscribe={() => { setPaywall(null); setShowPurchase(true); }} />
+      )}
       <CookieConsent />
       <div className="app">
         <PetalsBackground />
@@ -2095,6 +2263,10 @@ export default function App() {
             {isAdmin() && editorMode && tab === "products" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddProduct(true)}>+ Средство</button>}
             {isAdmin() && editorMode && tab === "ingredients" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddIngredient(true)}>+ Ингредиент</button>}
             {isAdmin() && <button className="btn btn-glass btn-sm" onClick={() => setShowSettings(s => !s)} title="Настройки">⚙</button>}
+            <button className="btn btn-glass btn-sm profile-btn" onClick={() => setShowProfile(true)} title="Личный кабинет">
+              <span className="profile-ava">{(userName()?.[0] || "Я").toUpperCase()}</span>
+              <span className={`tariff-pill ${isPro() ? "pro" : ""}`}>{isPro() ? "PRO" : "FREE"}</span>
+            </button>
             <button className="btn btn-glass btn-sm" onClick={() => { signOut(); setAuthed(false); setAuthScreen("landing"); setShowPurchase(false); }}>Выйти</button>
           </div>
         </div>
@@ -2254,7 +2426,7 @@ export default function App() {
             allProducts={products} compoCache={compoCache}
             loadAllCompositions={loadAllCompositions}
             inCompare={compareItems.some(p => p.id === selected.id)}
-            compareCount={compareItems.length} compareMax={COMPARE_MAX}
+            compareCount={compareItems.length} compareMax={compareLimit()}
             onAddToCompare={() => addProductToCompare(selected)}
             onGoCompare={goCompare}
             onImageSaved={async (id, url) => {
@@ -4502,6 +4674,101 @@ function syncCookieConsent() {
     if (ts && ACCESS_TOKEN && !CURRENT_USER?.user_metadata?.consent_cookie)
       updateUserProfile({ consent_cookie: ts }).catch(() => {});
   } catch { /* localStorage недоступен */ }
+}
+
+// ── Freemium: индикатор использования, paywall и личный кабинет ──
+function LkMeter({ label, used, limit }) {
+  const pct = Math.min(100, Math.round((used / limit) * 100));
+  const over = used >= limit;
+  return (
+    <div className="lk-meter">
+      <div className="lk-meter-top"><span>{label}</span><span className={over ? "over" : ""}>{used} / {limit}</span></div>
+      <div className="lk-meter-bar"><div className="lk-meter-fill" style={{ width: `${pct}%`, background: over ? "var(--rose)" : "var(--accent)" }} /></div>
+    </div>
+  );
+}
+
+const PAYWALL_COPY = {
+  search:   { title: "Поиск на эту неделю исчерпан", body: `На бесплатном тарифе ${FREE_LIMITS.search} поисков в неделю. С подпиской поиск без ограничений.` },
+  analysis: { title: "Анализ средств на эту неделю исчерпан", body: `На бесплатном тарифе ${FREE_LIMITS.analysis} анализа своих средств в неделю. С подпиской ограничений нет.` },
+  compare:  { title: "Сравнение до 2 средств", body: "На бесплатном тарифе можно сравнивать 2 средства. С подпиской доступно до 5 и подбор аналогов." },
+};
+
+function Paywall({ reason, onClose, onSubscribe }) {
+  const c = PAYWALL_COPY[reason] || PAYWALL_COPY.search;
+  return (
+    <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="paywall-card">
+        <div className="paywall-emoji" aria-hidden="true">🦋</div>
+        <h3 className="paywall-title">{c.title}</h3>
+        <p className="paywall-body">{c.body}</p>
+        <ul className="paywall-list">
+          <li>Безлимитный поиск и анализ составов</li>
+          <li>Полный тест и персональная схема ухода</li>
+          <li>Совместимость активов и дневник прогресса</li>
+          <li>Сравнение до 5 средств и подбор аналогов</li>
+        </ul>
+        <button className="btn btn-primary" onClick={onSubscribe}>Оформить подписку</button>
+        <button className="paywall-later" onClick={onClose}>Позже</button>
+      </div>
+    </div>
+  );
+}
+
+// Личный кабинет: тариф, использование за неделю, данные аккаунта, выход.
+function ProfileScreen({ profile, usage, pro, onClose, onSubscribe, onLogout }) {
+  const meta = CURRENT_USER?.user_metadata || {};
+  const name = meta.name || "";
+  const email = CURRENT_USER?.email || "";
+  const phone = meta.phone || "";
+  const proUntil = profile?.pro_until ? new Date(profile.pro_until).toLocaleDateString("ru-RU") : null;
+  return (
+    <div className="reg-overlay lk-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="lk-card">
+        <button className="lk-close" onClick={onClose} aria-label="Закрыть">✕</button>
+        <div className="lk-head">
+          <div className="lk-ava">{(name[0] || "Я").toUpperCase()}</div>
+          <div>
+            <div className="lk-name">{name || "Личный кабинет"}</div>
+            {email && <div className="lk-email">{email}</div>}
+          </div>
+        </div>
+
+        <div className={`lk-tariff ${pro ? "pro" : ""}`}>
+          <div>
+            <div className="lk-tariff-label">Тариф</div>
+            <div className="lk-tariff-val">{pro ? "Подписка PRO" : "Бесплатный"}</div>
+            {pro && proUntil && <div className="lk-tariff-until">активна до {proUntil}</div>}
+          </div>
+          {!pro && <button className="btn btn-primary btn-sm" onClick={onSubscribe}>Оформить подписку</button>}
+        </div>
+
+        {!pro && (
+          <div className="lk-meters">
+            <div className="lk-section-label">Использование на этой неделе</div>
+            <LkMeter label="Поиск по базе" used={usage.search} limit={FREE_LIMITS.search} />
+            <LkMeter label="Анализ своих средств" used={usage.analysis} limit={FREE_LIMITS.analysis} />
+            <div className="lk-hint">Лимиты обновляются раз в неделю. С подпиской ограничений нет.</div>
+          </div>
+        )}
+
+        {(name || email || phone) && (
+          <div className="lk-info">
+            <div className="lk-section-label">Данные аккаунта</div>
+            {name && <div className="lk-row"><span>Имя</span><b>{name}</b></div>}
+            {email && <div className="lk-row"><span>Почта</span><b>{email}</b></div>}
+            {phone && <div className="lk-row"><span>Телефон</span><b>{phone}</b></div>}
+          </div>
+        )}
+
+        <div className="lk-docs">
+          <a href={LEGAL.offer} target="_blank" rel="noopener noreferrer">Оферта</a>
+          <a href={LEGAL.policy} target="_blank" rel="noopener noreferrer">Политика</a>
+        </div>
+        <button className="lk-logout" onClick={onLogout}>Выйти из аккаунта</button>
+      </div>
+    </div>
+  );
 }
 
 // Модал покупки подписки (CloudPayments) — стиль боевых модалок.
