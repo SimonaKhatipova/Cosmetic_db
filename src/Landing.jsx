@@ -28,6 +28,16 @@ const labelStyle = {
   display: "flex", alignItems: "center", gap: 10, marginBottom: 16,
 };
 
+/* Название сервиса в тексте — фирменный шрифт и цвет, как в шапке */
+function Brand() {
+  return (
+    <span style={{
+      fontFamily: "'Familjen Grotesk', sans-serif", fontWeight: 700,
+      color: C.accent, letterSpacing: "-0.02em", whiteSpace: "nowrap",
+    }}>Beauty Helper</span>
+  );
+}
+
 function SectionLabel({ children, color }) {
   return (
     <div style={{ ...labelStyle, color: color || C.inkFaint }}>
@@ -139,15 +149,6 @@ function Navbar({ onLogin, onRegister, onScrollPricing }) {
       </div>
       <div style={{ flex: 1 }} />
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        {/* юр. требование: оферта и политика доступны из верхнего меню */}
-        <a href={LEGAL.offer} target="_blank" rel="noopener noreferrer" style={{
-          fontFamily: C.font, fontWeight: 500, fontSize: 12.5, color: C.inkFaint,
-          textDecoration: "none", padding: "9px 8px",
-        }}>Оферта</a>
-        <a href={LEGAL.policy} target="_blank" rel="noopener noreferrer" style={{
-          fontFamily: C.font, fontWeight: 500, fontSize: 12.5, color: C.inkFaint,
-          textDecoration: "none", padding: "9px 8px",
-        }}>Политика</a>
         <button onClick={onScrollPricing} style={{
           fontFamily: C.font, fontWeight: 600, fontSize: 14,
           padding: "9px 16px", borderRadius: 10, border: "none", cursor: "pointer",
@@ -265,83 +266,128 @@ function CareSteps({ label, steps, color }) {
   );
 }
 
-/* ── Шкала восстановления волос: змейка гонится за яблочками ──
-   Тело — синусоида, с каждым съеденным яблоком змейка длиннее, а её
-   шелковистые локоны, развевающиеся назад, — пышнее и длиннее. ── */
+/* ── Шкала восстановления волос: метаморфоз ──
+   Из кокона вылупляется гусеничка (тело в одно яблочко). На её пути ещё
+   9 яблок. Она ползёт справа налево, съедает каждое и растёт. В конце пути
+   превращается в бабочку, которая перелетает слева направо, и цикл повторяется.
+   Метафора: неделя за неделей уход преображает волосы. ── */
 const RECOVERY_STEPS = [
-  { seg: 1, text: "1-я неделя: заметно меньше ломкости" },
-  { seg: 3, text: "3-я неделя: волосы мягче на ощупь" },
-  { seg: 5, text: "5-я неделя: меньше жирности у корней" },
-  { seg: 7, text: "7-я неделя: объём и лёгкость" },
-  { seg: 9, text: "9-я неделя: желаемый результат близко" },
-  { seg: 10, text: "10-я неделя: цель достигнута!" },
+  { seg: 1,  text: "1-я неделя: заметно меньше ломкости" },
+  { seg: 3,  text: "3-я неделя: волосы мягче на ощупь" },
+  { seg: 5,  text: "5-я неделя: меньше жирности у корней" },
+  { seg: 7,  text: "7-я неделя: объём и лёгкость" },
+  { seg: 9,  text: "9-я неделя: желаемый результат близко" },
+  { seg: 10, text: "10-я неделя: цель достигнута, пора расправить крылья!" },
 ];
 
-const SNAKE = { x0: 30, x1: 308, cy: 36, apples: 10 };
-const HAIR_STRANDS = [
-  { dy: -7,  w: 2.2, o: 0.9  },
-  { dy: -4,  w: 1.9, o: 0.75 },
-  { dy: -1,  w: 1.6, o: 0.6  },
-  { dy: -9,  w: 1.5, o: 0.5  },
-];
+const META = { x0: 36, x1: 300, cy: 40, apples: 10 };
+// яблоки равномерно по пути: appleX[0] слева … appleX[9] справа (у кокона)
+const appleX = Array.from({ length: META.apples }, (_, i) =>
+  META.x0 + (META.x1 - META.x0) * (i / (META.apples - 1)));
+const SEG_GAP = 9.6;            // расстояние между сегментами тела
+const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
-function HairRecoveryBar() {
-  const bodyRef = useRef(null);
-  const headRef = useRef(null);
-  const hairRefs = useRef([]);
+function MetamorphosisBar() {
+  const cocoonRef = useRef(null);
+  const catRef = useRef(null);       // группа гусенички
+  const headRef = useRef(null);      // голова (для волны/наклона)
+  const segRefs = useRef([]);        // 10 сегментов тела (0 — за головой)
+  const flyRef = useRef(null);       // бабочка
+  const wingRefs = useRef([]);       // крылья для взмаха
   const appleRefs = useRef([]);
   const [week, setWeek] = useState(0);
   const weekRef = useRef(0);
 
   useEffect(() => {
     let raf, start;
-    const CYCLE = 16000, REST = 2200; // ~14с погони + пауза «цель достигнута»
-    const { x0, x1, cy, apples } = SNAKE;
+    const CYCLE = 17000;
+    const { x0, x1, cy, apples } = META;
+    const HATCH = 0.12, EAT = 0.82, MORPH = 0.90; // границы фаз внутри цикла
 
     const frame = (now) => {
       if (start === undefined) start = now;
-      const p = Math.min(1, ((now - start) % CYCLE) / (CYCLE - REST));
+      const c = ((now - start) % CYCLE) / CYCLE;
       const t = now / 1000;
 
-      const headX = x0 + (x1 - x0) * p;
-      const amp = 6.5 + 3.5 * p;
-      const wave = (x, damp = 1) => cy + amp * damp * Math.sin(0.082 * x + t * 2.3);
-
-      // тело: от головы назад, у головы колебание мягче
-      const L = 26 + 165 * p;
-      let d = "";
-      const N = 30;
-      for (let s = 0; s <= N; s++) {
-        const x = headX - (L * s) / N;
-        const y = wave(x, 0.3 + 0.7 * (s / N));
-        d += (s === 0 ? "M" : "L") + x.toFixed(1) + " " + y.toFixed(1) + " ";
+      // позиция головы по фазам
+      let headX, catOp, cocoonOp, flyOp;
+      if (c < HATCH) {
+        headX = x1;
+        cocoonOp = 1 - sstep(HATCH - 0.05, HATCH, c);
+        catOp = sstep(HATCH - 0.06, HATCH, c);
+        flyOp = 0;
+      } else if (c < EAT) {
+        const pe = (c - HATCH) / (EAT - HATCH);
+        headX = x1 - (x1 - x0) * pe;
+        cocoonOp = 0; catOp = 1; flyOp = 0;
+      } else if (c < MORPH) {
+        headX = x0;
+        const pm = (c - EAT) / (MORPH - EAT);
+        cocoonOp = 0; catOp = 1 - sstep(0, 1, pm); flyOp = sstep(0, 1, pm);
+      } else {
+        headX = x0;
+        cocoonOp = 0; catOp = 0; flyOp = 1;
       }
-      bodyRef.current?.setAttribute("d", d);
 
-      const hy = wave(headX, 0.3);
-      headRef.current?.setAttribute("transform", `translate(${headX.toFixed(1)}, ${hy.toFixed(1)})`);
+      // сколько яблок съедено = сегментов тела (1 на старте … 10 в конце)
+      const eaten = (c < HATCH)
+        ? 0
+        : apples - appleX.filter(ax => ax < headX - 4).length; // съедены те, что правее/под головой
+      const segCount = Math.max(1, eaten);
 
-      // локоны: от затылка назад, колышутся и растут с прогрессом
-      const hairLen = 9 + 42 * p;
-      hairRefs.current.forEach((h, i) => {
-        if (!h) return;
-        const { dy } = HAIR_STRANDS[i];
-        const sway = Math.sin(t * 2.7 + i * 1.15) * (2.5 + 2 * p);
-        const lift = dy * (0.6 + 0.55 * p);
-        h.setAttribute("d",
-          `M -2 ${(lift * 0.25).toFixed(1)} ` +
-          `q ${(-hairLen * 0.45).toFixed(1)} ${(lift * 0.6 + sway * 0.5).toFixed(1)} ` +
-          `${(-hairLen).toFixed(1)} ${(lift + sway).toFixed(1)}`);
-      });
+      // голова и сегменты с «гусеничным» горбиком (бегущая волна вдоль тела)
+      if (catRef.current) catRef.current.style.opacity = catOp.toFixed(2);
+      for (let k = 0; k < 10; k++) {
+        const el = segRefs.current[k];
+        if (!el) continue;
+        const visible = k < segCount;
+        el.style.display = visible ? "" : "none";
+        if (!visible) continue;
+        const sx = headX + k * SEG_GAP;                       // тело тянется вправо, назад
+        const hump = Math.max(0, Math.sin(t * 5 - k * 0.85)) * 3.4; // инчворм-волна
+        const sy = cy - hump;
+        el.setAttribute("transform", `translate(${sx.toFixed(1)}, ${sy.toFixed(1)})`);
+      }
+      if (headRef.current) {
+        const tilt = Math.sin(t * 5) * 6;
+        headRef.current.setAttribute("transform", `rotate(${tilt.toFixed(1)})`);
+      }
 
-      // яблоки: съеденные исчезают
+      // кокон
+      if (cocoonRef.current) {
+        cocoonRef.current.style.opacity = cocoonOp.toFixed(2);
+        const sway = Math.sin(t * 3) * 2 * cocoonOp;
+        cocoonRef.current.setAttribute("transform", `translate(${x1 + 8}, ${cy}) rotate(${sway.toFixed(1)})`);
+      }
+
+      // бабочка: появляется слева, перелетает слева направо вверх
+      if (flyRef.current) {
+        flyRef.current.style.opacity = flyOp.toFixed(2);
+        let bx = x0, by = cy, fade = 1;
+        if (c >= MORPH) {
+          const pf = (c - MORPH) / (1 - MORPH);
+          bx = x0 + (x1 - x0 + 30) * pf;
+          by = cy - 16 * Math.sin(Math.PI * pf) - 6 * pf;
+          fade = 1 - sstep(0.7, 1, pf);
+        } else if (c >= EAT) {
+          by = cy - 4 * sstep(0, 1, (c - EAT) / (MORPH - EAT));
+        }
+        flyRef.current.style.opacity = (flyOp * fade).toFixed(2);
+        flyRef.current.setAttribute("transform", `translate(${bx.toFixed(1)}, ${by.toFixed(1)})`);
+        const flap = 0.45 + 0.55 * Math.abs(Math.sin(t * 9));
+        wingRefs.current.forEach((w, i) => {
+          if (w) w.setAttribute("transform", `scale(${(i === 0 ? -flap : flap).toFixed(2)}, 1)`);
+        });
+      }
+
+      // яблоки: исчезают, когда голова до них доходит
       appleRefs.current.forEach((a, i) => {
         if (!a) return;
-        const ax = x0 + (x1 - x0) * ((i + 1) / apples);
-        a.style.opacity = headX >= ax - 7 ? "0" : "1";
+        const eatenApple = c >= HATCH && headX <= appleX[i] + 4;
+        a.style.opacity = eatenApple ? "0" : "1";
       });
 
-      const w = Math.min(apples, Math.floor(p * apples + 1e-6) + (p >= 1 ? 0 : 0));
+      const w = Math.min(apples, eaten);
       if (w !== weekRef.current) { weekRef.current = w; setWeek(w); }
       raf = requestAnimationFrame(frame);
     };
@@ -349,7 +395,7 @@ function HairRecoveryBar() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const msg = [...RECOVERY_STEPS].reverse().find(s => week >= s.seg)?.text ?? "Начинаем программу ухода…";
+  const msg = [...RECOVERY_STEPS].reverse().find(s => week >= s.seg)?.text ?? "Кокон готов, скоро вылупится гусеничка…";
 
   return (
     <div style={{
@@ -361,47 +407,80 @@ function HairRecoveryBar() {
         <span style={{ fontSize: 9.5, fontWeight: 700, color: C.inkFaint, letterSpacing: ".1em", textTransform: "uppercase" }}>
           Восстановление волос
         </span>
-        <span style={{ fontSize: 11, fontWeight: 700, color: week >= SNAKE.apples ? C.accentS : C.inkSoft }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: week >= META.apples ? C.accentS : C.inkSoft }}>
           {week * 10}%
         </span>
       </div>
 
       <svg viewBox="0 0 340 64" style={{ display: "block", width: "100%", height: "auto", marginBottom: 4 }} aria-hidden="true">
         <defs>
-          <linearGradient id="snakeBody" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0" stopColor="#2a9b73" stopOpacity="0.45" />
-            <stop offset="1" stopColor="#0f6b4d" />
+          <radialGradient id="catSeg" cx="0.35" cy="0.3" r="0.8">
+            <stop offset="0" stopColor="#9cd05f" />
+            <stop offset="1" stopColor="#4f8f2a" />
+          </radialGradient>
+          <linearGradient id="wing" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor={C.accent} />
+            <stop offset="1" stopColor="#9b7db4" />
           </linearGradient>
         </defs>
 
         {/* яблочки на пути */}
-        {Array.from({ length: SNAKE.apples }).map((_, i) => {
-          const ax = SNAKE.x0 + (SNAKE.x1 - SNAKE.x0) * ((i + 1) / SNAKE.apples);
-          return (
-            <g key={i} ref={el => { appleRefs.current[i] = el; }}
-              transform={`translate(${ax}, ${SNAKE.cy})`}
-              style={{ transition: "opacity .45s ease" }}>
-              <circle r="4.4" fill="#d2544a" />
-              <circle r="4.4" fill="url(#snakeBody)" opacity="0.12" />
-              <path d="M 0 -4 q 0.6 -2.4 2 -3" stroke="#7a4a2e" strokeWidth="1.1" fill="none" strokeLinecap="round" />
-              <ellipse cx="2.6" cy="-6.2" rx="2" ry="1.1" fill="#2a9b73" transform="rotate(-24 2.6 -6.2)" />
+        {Array.from({ length: META.apples }).map((_, i) => (
+          <g key={i} ref={el => { appleRefs.current[i] = el; }}
+            transform={`translate(${appleX[i]}, ${META.cy})`}
+            style={{ transition: "opacity .4s ease" }}>
+            <circle r="4.3" fill="#d2544a" />
+            <ellipse cx="-1.3" cy="-1.3" rx="1.5" ry="1" fill="#fff" opacity="0.4" />
+            <path d="M 0 -4 q 0.6 -2.4 2 -3" stroke="#7a4a2e" strokeWidth="1.1" fill="none" strokeLinecap="round" />
+            <ellipse cx="2.6" cy="-6.2" rx="2" ry="1.1" fill="#4f8f2a" transform="rotate(-24 2.6 -6.2)" />
+          </g>
+        ))}
+
+        {/* кокон справа */}
+        <g ref={cocoonRef} style={{ transition: "opacity .3s ease" }}>
+          <line x1="0" y1="-22" x2="0" y2="-8" stroke="#b9c9a6" strokeWidth="1.2" />
+          <ellipse cx="0" cy="-1" rx="6.5" ry="11" fill="#cfe0b8" />
+          <path d="M -4 -8 Q 0 -4 4 -8 M -5 -2 Q 0 2 5 -2 M -4 4 Q 0 8 4 4"
+            stroke="#a7bd86" strokeWidth="1" fill="none" opacity="0.8" />
+        </g>
+
+        {/* гусеничка: голова + сегменты тела (тянутся вправо/назад) */}
+        <g ref={catRef}>
+          {Array.from({ length: 10 }).map((_, k) => (
+            <g key={k} ref={el => { segRefs.current[k] = el; }} style={{ display: "none" }}>
+              {k === 0 ? (
+                <g ref={headRef}>
+                  <circle r="6.4" fill="url(#catSeg)" />
+                  <line x1="-2" y1="-5.5" x2="-4" y2="-10" stroke="#3f7a1e" strokeWidth="1.1" strokeLinecap="round" />
+                  <line x1="2" y1="-5.5" x2="4" y2="-10" stroke="#3f7a1e" strokeWidth="1.1" strokeLinecap="round" />
+                  <circle cx="-4" cy="-10" r="1.2" fill="#3f7a1e" />
+                  <circle cx="4" cy="-10" r="1.2" fill="#3f7a1e" />
+                  <circle cx="-2.4" cy="-1" r="1.5" fill="#fff" />
+                  <circle cx="-1.9" cy="-1" r="0.8" fill="#1c2a12" />
+                  <circle cx="2.4" cy="-1" r="1.5" fill="#fff" />
+                  <circle cx="2.9" cy="-1" r="0.8" fill="#1c2a12" />
+                  <path d="M -2 2.6 q 2 1.8 4 0" stroke="#2c5715" strokeWidth="0.9" fill="none" strokeLinecap="round" />
+                </g>
+              ) : (
+                <circle r={(5.8 - k * 0.18).toFixed(1)} fill="url(#catSeg)" stroke="#3f7a1e" strokeWidth="0.6" />
+              )}
             </g>
-          );
-        })}
-
-        {/* тело змейки */}
-        <path ref={bodyRef} d="" fill="none" stroke="url(#snakeBody)" strokeWidth="7" strokeLinecap="round" />
-
-        {/* голова: мордочка + шелковистые локоны назад */}
-        <g ref={headRef}>
-          {HAIR_STRANDS.map((s, i) => (
-            <path key={i} ref={el => { hairRefs.current[i] = el; }} d=""
-              fill="none" stroke="#9b7db4" strokeWidth={s.w} strokeLinecap="round" opacity={s.o} />
           ))}
-          <circle r="6.2" fill="#0f6b4d" />
-          <circle cx="2.4" cy="-1.8" r="1.5" fill="#fff" />
-          <circle cx="2.9" cy="-1.8" r="0.8" fill="#16241d" />
-          <path d="M 1.5 2.2 q 1.8 1.4 3.6 0.4" stroke="#fff" strokeWidth="0.9" fill="none" strokeLinecap="round" opacity="0.85" />
+        </g>
+
+        {/* бабочка */}
+        <g ref={flyRef} style={{ opacity: 0 }}>
+          <g ref={el => { wingRefs.current[0] = el; }}>
+            <ellipse cx="-5" cy="-3" rx="6" ry="4.5" fill="url(#wing)" opacity="0.92" />
+            <ellipse cx="-4.5" cy="3.5" rx="4.5" ry="3.5" fill="url(#wing)" opacity="0.78" />
+          </g>
+          <g ref={el => { wingRefs.current[1] = el; }}>
+            <ellipse cx="-5" cy="-3" rx="6" ry="4.5" fill="url(#wing)" opacity="0.92" />
+            <ellipse cx="-4.5" cy="3.5" rx="4.5" ry="3.5" fill="url(#wing)" opacity="0.78" />
+          </g>
+          <ellipse cx="0" cy="0" rx="1.3" ry="5.5" fill="#3a2a44" />
+          <line x1="0" y1="-5" x2="-2.5" y2="-9" stroke="#3a2a44" strokeWidth="0.9" strokeLinecap="round" />
+          <line x1="0" y1="-5" x2="2.5" y2="-9" stroke="#3a2a44" strokeWidth="0.9" strokeLinecap="round" />
         </g>
       </svg>
 
@@ -557,8 +636,9 @@ function Hero({ onRegister, onScrollPricing }) {
             fontSize: "clamp(16px, 1.9vw, 20px)", color: C.inkSoft,
             lineHeight: 1.72, maxWidth: 560, marginBottom: 40,
           }}>
-            В большинстве случаев дело в составе. Beauty Helper объясняет
-            что там написано и помогает выбрать то, что подходит именно Вам.
+            Подходит ли Вам Ваш шампунь? Как пользоваться этой дорогущей маской,
+            чтобы результат был виден? Сочетаются ли активы в любимых средствах?
+            Давайте разбираться вместе с <Brand />.
           </p>
 
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 56 }}>
@@ -682,10 +762,10 @@ function Hero({ onRegister, onScrollPricing }) {
 
             {/* Шаги ухода */}
             {[
-              { n: 1, step: "Глубокое очищение", product: "Раз в неделю — по Вашим индивидуальным показаниям" },
+              { n: 1, step: "Глубокое очищение", product: "Раз в неделю, по Вашим индивидуальным показаниям" },
               { n: 2, step: "Очищение",          product: "Шампунь, подобранный под Ваш тип кожи головы" },
               { n: 3, step: "Уход",              product: "Смываемые средства: красота волос и восстановление повреждений" },
-              { n: 4, step: "Защита",            product: "Несмываемый финиш — минимум вреда от окружающей среды" },
+              { n: 4, step: "Защита",            product: "Несмываемый финиш для защиты от окружающей среды" },
             ].map(({ n, step, product }, i, arr) => (
               <div key={n} style={{
                 display: "flex", alignItems: "flex-start", gap: 11,
@@ -736,8 +816,8 @@ function Hero({ onRegister, onScrollPricing }) {
             </div>
           </div>
 
-          {/* 5. Шкала восстановления волос */}
-          <HairRecoveryBar />
+          {/* 5. Шкала восстановления волос: метаморфоз гусенички */}
+          <MetamorphosisBar />
         </motion.div>
       </div>
     </section>
@@ -751,18 +831,18 @@ function Problems() {
   const pains = [
     {
       n: "01",
-      title: "Купили, а не подошло",
-      desc: "Деньги уходят на средства, «которые советуют все», а результата нет. Beauty Helper подбирает уход под Ваш тип кожи и волос — чтобы каждая покупка работала на Вашу цель, а не пылилась на полке.",
+      title: "Средство куплено, результата нет",
+      desc: <>Деньги уходят на банки по чужим советам, а зеркало перемен не замечает. <Brand /> подбирает уход под Ваш тип кожи и волос, поэтому каждая покупка приближает Вас к цели.</>,
     },
     {
       n: "02",
-      title: "Состав — закрытая книга",
-      desc: "Phenoxyethanol, Caprylic Triglyceride, Niacinamide… Мы расшифровываем каждый ингредиент на понятном русском: что он делает, кому подходит и на что обратить внимание именно Вам.",
+      title: "Состав как закрытая книга",
+      desc: <>Phenoxyethanol, Caprylic Triglyceride, Niacinamide… Мы расшифровываем каждый ингредиент на понятном русском: что он делает, кому подходит и на что обратить внимание именно Вам.</>,
     },
     {
       n: "03",
-      title: "Советы работают не для Вас",
-      desc: "Общие рекомендации не учитывают Ваши особенности и реакции. Мы анализируем Ваш профиль и Ваши средства — и собираем схему, которая подходит лично Вам.",
+      title: "Общие советы Вам не помогают",
+      desc: <>Рекомендации блогеров рассчитаны на всех сразу. Мы анализируем Ваш профиль и Ваши средства, чтобы собрать схему ухода лично для Вас.</>,
     },
   ];
 
@@ -781,7 +861,7 @@ function Problems() {
           Почему так происходит
         </h2>
         <p style={{ fontSize: 16, color: C.inkSoft, lineHeight: 1.65, marginBottom: 48, maxWidth: 640 }}>
-          Beauty Helper создан, чтобы закрыть эти боли — один сервис
+          <Brand /> создан, чтобы закрыть эти боли. Один сервис
           для всех Ваших бьюти-вопросов.
         </p>
 
@@ -827,7 +907,7 @@ function Solution() {
   ];
 
   const wash  = ["Пилинг кожи головы", "Шампунь под Ваш тип кожи головы", "Комплексная маска", "Поверхностный кондиционер"];
-  const treat = ["Термозащита под Вашу рутину укладки", "Масло — финишный продукт"];
+  const treat = ["Термозащита под Вашу рутину укладки", "Масло как финишный продукт"];
 
   return (
     <section style={{ padding: "96px clamp(1.5rem, 6vw, 4rem)" }}>
@@ -952,7 +1032,7 @@ function HowItWorks() {
     {
       n: "1",
       title: "Расскажите о себе",
-      desc: "Полный профессиональный тест: тип кожи и волос, их состояние, привычки, цели и беспокойства. Чем точнее профиль — тем точнее подбор средств под Ваши индивидуальные особенности.",
+      desc: "Полный профессиональный тест: тип кожи и волос, их состояние, привычки, цели и беспокойства. Чем точнее профиль, тем точнее подбор средств под Ваши индивидуальные особенности.",
     },
     {
       n: "2",
@@ -962,7 +1042,7 @@ function HowItWorks() {
     {
       n: "3",
       title: "Идите к цели по схеме",
-      desc: "Получите индивидуальную схему ухода, ведите дневник прогресса — и двигайтесь к своим бьюти-целям вместе с нами: чувствовать себя счастливой, красивой, здоровой и уверенной.",
+      desc: "Получите индивидуальную схему ухода, ведите дневник прогресса и двигайтесь к своим бьюти-целям вместе с нами: чувствовать себя счастливой, красивой, здоровой и уверенной.",
     },
   ];
 
@@ -1029,12 +1109,12 @@ function Testimonials() {
       detail: "Уход не давал результата",
     },
     {
-      text: "После осветления волосы были как солома. Подобрали восстановление по составам — через два месяца они снова мягкие и блестят.",
+      text: "После осветления волосы были как солома. Подобрали восстановление по составам, и через два месяца они снова мягкие и блестят.",
       name: "Катя В.",
       detail: "Окрашенные волосы",
     },
     {
-      text: "Перепробовала кучу «аптечных» шампуней от перхоти. Здесь объяснили, какие компоненты мне нужны, — проблема ушла и не возвращается.",
+      text: "Перепробовала кучу «аптечных» шампуней от перхоти. Здесь объяснили, какие компоненты мне нужны, и проблема ушла, больше не возвращается.",
       name: "Мария Т.",
       detail: "Перхоть и чувствительная кожа головы",
     },
@@ -1118,7 +1198,7 @@ function PricingSection({ onRegister, onPurchase }) {
     "Полный профессиональный тест + подбор средств под Вас",
     "Индивидуальные схемы ухода: волосы и лицо",
     "Анализ совместимости Ваших средств",
-    "Дневник прогресса — к бьюти-целям вместе с нами",
+    "Дневник прогресса и движение к целям вместе с нами",
     "Сравнение до 5 средств и подбор аналогов",
     "Отдельная рутина для кудрявых волос",
   ];
@@ -1138,8 +1218,8 @@ function PricingSection({ onRegister, onPurchase }) {
           Начните бесплатно
         </h2>
         <p style={{ fontSize: 16, color: C.inkSoft, marginBottom: 44, lineHeight: 1.6 }}>
-          Базовые функции — бесплатно и навсегда. Полный тест, индивидуальные
-          схемы ухода, безлимитные анализы и сопровождение к цели — в подписке.
+          Базовые функции бесплатны и доступны навсегда. Подписка добавляет полный
+          тест, индивидуальные схемы ухода, безлимитные анализы и сопровождение к цели.
         </p>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>

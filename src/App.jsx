@@ -127,6 +127,19 @@ function signOut() {
   try { localStorage.removeItem("sb_token"); } catch {}
 }
 
+// Письмо со ссылкой для сброса пароля (Supabase recover)
+async function sendRecovery(email) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email })
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.error_description || data?.msg || "Не удалось отправить письмо");
+  }
+}
+
 // Регистрация через одноразовый код на почту (Supabase email-OTP).
 // ВАЖНО: шаблон письма «Magic Link» в Supabase Dashboard должен содержать {{ .Token }},
 // иначе пользователю придёт ссылка без 6-значного кода.
@@ -673,6 +686,52 @@ const styles = `
   .field-hint { font-size: 9px; font-weight: 600; color: var(--accent-soft); text-transform: none; letter-spacing: 0; opacity: 0.8; }
   .filter-check.soon { opacity: 0.6; }
   .soon-tag { font-style: normal; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--warn); background: rgba(201,138,58,0.14); border-radius: 5px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; }
+
+  /* ── Раскладка страницы средств: на десктопе фильтры слева ── */
+  .products-layout { display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 28px; align-items: start; }
+  .products-main { min-width: 0; }
+  .filter-sidebar {
+    position: sticky; top: 16px;
+    background: var(--glass-warm); border: 1px solid var(--glass-border);
+    backdrop-filter: blur(16px) saturate(140%); -webkit-backdrop-filter: blur(16px) saturate(140%);
+    border-radius: 18px; padding: 14px 14px 18px; box-shadow: var(--shadow-sm);
+    max-height: calc(100vh - 32px); overflow-y: auto;
+  }
+  .filter-sidebar-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 800;
+    color: var(--ink-soft); padding: 2px 4px 11px; margin-bottom: 6px;
+    border-bottom: 1px solid var(--glass-border);
+  }
+  .filter-sidebar-head .filter-reset { padding: 0; font-size: 11px; }
+  .filter-sidebar-body { display: flex; flex-direction: column; gap: 16px; }
+  .filter-sidebar-body .filter-field { min-width: 0; }
+  .filter-sidebar-body .filter-checks { flex-direction: column; align-items: flex-start; gap: 11px; }
+
+  /* Развёрнутое дерево вида средства (сайдбар) */
+  .hier-tree { display: flex; flex-direction: column; gap: 1px; margin-top: 4px; }
+  .hier-tree-root, .hier-tree-item, .hier-tree-sub-head { cursor: pointer; border-radius: 8px; transition: background .12s, color .12s; }
+  .hier-tree-root { padding: 7px 10px; font-size: 13px; font-weight: 600; color: var(--ink); }
+  .hier-tree-root:hover, .hier-tree-item:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .hier-tree-root.active, .hier-tree-item.active { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent-deep); font-weight: 600; }
+  .hier-tree-group { margin-top: 6px; }
+  .hier-tree-group-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--ink-soft); padding: 6px 6px 4px; }
+  .hier-tree-sub { margin: 1px 0 2px 7px; padding-left: 7px; border-left: 2px solid color-mix(in srgb, var(--accent) 24%, transparent); }
+  .hier-tree-sub-head { padding: 6px 8px 3px; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); }
+  .hier-tree-sub-head:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-deep); }
+  .hier-tree-sub-head.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  .hier-tree-item { padding: 6px 9px; font-size: 13px; color: var(--ink); }
+
+  /* Десктоп: кнопка «Фильтры» и мобильная панель скрыты — фильтры в сайдбаре */
+  @media (min-width: 861px) {
+    .filter-toggle { display: none; }
+    .products-main .filter-panel { display: none; }
+  }
+  /* Мобайл/планшет: сайдбар скрыт, фильтры — дропдауном по кнопке */
+  @media (max-width: 860px) {
+    .products-layout { display: block; }
+    .filter-sidebar { display: none; }
+  }
 
   .filter-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
   .chip {
@@ -1351,6 +1410,10 @@ const styles = `
     background: rgba(192,82,74,0.1); color: #a8463d; border: 1px solid rgba(192,82,74,0.28);
     border-radius: 10px; padding: 9px 12px; font-size: 12.5px; margin-bottom: 12px; text-align: center;
   }
+  .login3-info {
+    background: rgba(42,155,115,0.1); color: var(--accent-deep); border: 1px solid rgba(42,155,115,0.28);
+    border-radius: 10px; padding: 9px 12px; font-size: 12.5px; margin-bottom: 12px; text-align: center;
+  }
 
   /* ── Admin-модалки и формы: стили потерялись при переходе на UI v6, восстановлены ── */
   .modal-overlay {
@@ -1608,6 +1671,8 @@ export default function App() {
   const goCompare = () => { setDetail(null); setSelected(null); setTab("compare"); };
 
   useEffect(() => { restoreSession().then(ok => { setAuthed(ok); setAuthChecked(true); }); }, []);
+  // факт cookie-согласия привязываем к аккаунту после входа
+  useEffect(() => { if (authed) syncCookieConsent(); }, [authed]);
 
   const loadProducts = useCallback(async () => {
     setLoading(true); setError("");
@@ -1869,22 +1934,76 @@ export default function App() {
 
   const productTypes = opt.types;
 
+  // Контролы фильтров (кроме вида средства) — общие для мобильной панели и десктопного сайдбара
+  const filterControls = (
+    <>
+      {showFnFilter && (
+        <div className="filter-field">
+          <label>Функция</label>
+          <select value={filters.fn} onChange={e => setFilters(f => ({ ...f, fn: e.target.value }))}>
+            <option value="">Любая</option>
+            {Object.entries(FN_KEYS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+        </div>
+      )}
+      {showScalp && (
+        <div className="filter-field">
+          <label>Тип кожи головы</label>
+          <select value={filters.scalp} onChange={e => setFilters(f => ({ ...f, scalp: e.target.value }))}>
+            <option value="">Любой</option>
+            {Object.entries(SCALP_INFO).map(([k, info]) => (
+              <option key={k} value={k} style={{ textTransform: "capitalize" }}>{k} · {info}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      {showWash && opt.washes.length > 0 && (
+        <div className="filter-field">
+          <label>Промывающая способность <span className="field-hint">для продвинутых</span></label>
+          <select value={filters.wash} onChange={e => setFilters(f => ({ ...f, wash: e.target.value }))}>
+            <option value="">Любая</option>
+            {opt.washes.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+      )}
+      <div className="filter-field">
+        <label>Ценовая категория</label>
+        <select value={filters.price} onChange={e => setFilters(f => ({ ...f, price: e.target.value }))}>
+          <option value="">Любая</option>
+          <option value="бюджетно">Бюджетно</option>
+          <option value="средняя">Средняя</option>
+          <option value="высокая">Высокая</option>
+        </select>
+      </div>
+      <div className="filter-checks">
+        {visibleFlags.map(f => (
+          <label key={f.id} className={`filter-check ${f.status === "soon" ? "soon" : ""}`} title={f.status === "soon" ? "В плане реализации" : ""}>
+            <input type="checkbox" checked={!!filters.flags[f.id]} onChange={() => toggleFlag(f.id)} />
+            <span>{f.label}{f.status === "soon" && <em className="soon-tag">скоро</em>}</span>
+          </label>
+        ))}
+      </div>
+    </>
+  );
+
   if (!authChecked) return (<><style>{styles}</style><div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(168deg,#eef5f3,#e0eeea)" }}><div className="loading-dots"><span /><span /><span /></div></div></>);
   if (!authed) return (
     <>
       <style>{styles}</style>
-      {/* регистрация — оверлеем поверх заблюренного лендинга, поэтому лендинг остаётся в дереве */}
-      {(authScreen === "landing" || authScreen === "register") && (
-        <Landing
-          onLogin={() => setAuthScreen("login")}
-          onRegister={() => setAuthScreen("register")}
-          onPurchase={() => setShowPurchase(true)}
-        />
-      )}
+      {/* вход и регистрация — оверлеями поверх заблюренного лендинга: лендинг
+          остаётся в дереве, и после закрытия пользователь возвращается к тому
+          же месту страницы, где остановился */}
+      <Landing
+        onLogin={() => setAuthScreen("login")}
+        onRegister={() => setAuthScreen("register")}
+        onPurchase={() => setShowPurchase(true)}
+      />
       {authScreen === "login" && (
-        <LoginScreen onSuccess={() => setAuthed(true)}
-          onShowRegister={() => setAuthScreen("register")}
-          onBack={() => setAuthScreen("landing")} />
+        <div className="reg-overlay" onClick={e => { if (e.target === e.currentTarget) setAuthScreen("landing"); }}>
+          <LoginScreen onSuccess={() => setAuthed(true)}
+            onShowRegister={() => setAuthScreen("register")}
+            onBack={() => setAuthScreen("landing")} />
+        </div>
       )}
       {authScreen === "register" && (
         <div className="reg-overlay" onClick={e => { if (e.target === e.currentTarget) setAuthScreen("landing"); }}>
@@ -2003,138 +2122,111 @@ export default function App() {
           {error && <div className="error-msg">{error}</div>}
 
           {tab === "products" && (
-            <>
-              <div className="toolbar">
-                <input className="search" placeholder="Поиск по названию или бренду…" value={search} onChange={e => setSearch(e.target.value)} />
-                <button className={`btn btn-sm ${activeCount ? "btn-primary" : "btn-glass"} filter-toggle`} onClick={() => setFiltersOpen(o => !o)}>
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ marginRight: 6, verticalAlign: "-2px" }}>
-                    <path d="M1 2h12M3 7h8M5 12h4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                  </svg>
-                  Фильтры{activeCount ? ` · ${activeCount}` : ""}
-                </button>
-              </div>
-
-              {filtersOpen && (
-                <div className="filter-panel">
-                  <div className="filter-field">
-                    <label>Вид средства</label>
-                    <HierType value={filters.type} sel={filters.typeSel} onChange={setType} types={opt.types} />
-                  </div>
-                  {showFnFilter && (
-                    <div className="filter-field">
-                      <label>Функция</label>
-                      <select value={filters.fn} onChange={e => setFilters(f => ({ ...f, fn: e.target.value }))}>
-                        <option value="">Любая</option>
-                        {Object.entries(FN_KEYS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-                      </select>
-                    </div>
-                  )}
-                  {showScalp && (
-                    <div className="filter-field">
-                      <label>Тип кожи головы</label>
-                      <select value={filters.scalp} onChange={e => setFilters(f => ({ ...f, scalp: e.target.value }))}>
-                        <option value="">Любой</option>
-                        {Object.entries(SCALP_INFO).map(([k, info]) => (
-                          <option key={k} value={k} style={{ textTransform: "capitalize" }}>{k} · {info}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                  {showWash && opt.washes.length > 0 && (
-                    <div className="filter-field">
-                      <label>Промывающая способность <span className="field-hint">для продвинутых</span></label>
-                      <select value={filters.wash} onChange={e => setFilters(f => ({ ...f, wash: e.target.value }))}>
-                        <option value="">Любая</option>
-                        {opt.washes.map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </div>
-                  )}
-                  <div className="filter-field">
-                    <label>Ценовая категория</label>
-                    <select value={filters.price} onChange={e => setFilters(f => ({ ...f, price: e.target.value }))}>
-                      <option value="">Любая</option>
-                      <option value="бюджетно">Бюджетно</option>
-                      <option value="средняя">Средняя</option>
-                      <option value="высокая">Высокая</option>
-                    </select>
-                  </div>
-                  <div className="filter-checks">
-                    {visibleFlags.map(f => (
-                      <label key={f.id} className={`filter-check ${f.status === "soon" ? "soon" : ""}`} title={f.status === "soon" ? "В плане реализации" : ""}>
-                        <input type="checkbox" checked={!!filters.flags[f.id]} onChange={() => toggleFlag(f.id)} />
-                        <span>{f.label}{f.status === "soon" && <em className="soon-tag">скоро</em>}</span>
-                      </label>
-                    ))}
-                  </div>
+            <div className="products-layout">
+              {/* Десктоп: фильтры слева развёрнутым списком (как в каталогах) */}
+              <aside className="filter-sidebar">
+                <div className="filter-sidebar-head">
+                  <span>Фильтры{activeCount ? ` · ${activeCount}` : ""}</span>
                   {activeCount > 0 && <button className="filter-reset" onClick={resetFilters}>Сбросить</button>}
                 </div>
-              )}
-
-              {activeCount > 0 && (
-                <div className="filter-chips">
-                  {filters.type && <span className="chip" onClick={() => setType(null)}>{filters.type} ✕</span>}
-                  {filters.fn && <span className="chip" onClick={() => setFilters(f => ({ ...f, fn: "" }))}>{FN_KEYS[filters.fn]} ✕</span>}
-                  {filters.scalp && <span className="chip" onClick={() => setFilters(f => ({ ...f, scalp: "" }))} style={{ textTransform: "capitalize" }}>Кожа: {filters.scalp} ✕</span>}
-                  {filters.wash && <span className="chip" onClick={() => setFilters(f => ({ ...f, wash: "" }))}>{filters.wash} ✕</span>}
-                  {filters.price && <span className="chip" onClick={() => setFilters(f => ({ ...f, price: "" }))} style={{ textTransform: "capitalize" }}>{filters.price} ✕</span>}
-                  {FLAGS.filter(f => filters.flags[f.id]).map(f => (
-                    <span key={f.id} className="chip" onClick={() => toggleFlag(f.id)}>{f.label} ✕</span>
-                  ))}
-                </div>
-              )}
-
-              <div className="section-head">
-                <div className="section-title">Косметические средства</div>
-                <div className="ing-head-right">
-                  <select className="sim-select ing-sort" value={prodSort} onChange={e => setProdSort(e.target.value)}>
-                    <option value="recommend">Рекомендации</option>
-                    <option value="date">По дате добавления</option>
-                    <option value="price">По цене</option>
-                    <option value="name">По названию</option>
-                    <option value="type">По группам</option>
-                    <option value="brand">По бренду</option>
-                  </select>
-                  <div className="count">{filteredProducts.length} позиций</div>
-                </div>
-              </div>
-              {loading ? <LoadingMascot />
-                : filteredProducts.length === 0 ? (
-                  <div className="empty-state">
-                    <span className="empty-ic">◇</span>
-                    <p>{search || activeCount ? "Ничего не найдено по выбранным фильтрам" : "Средства ещё не добавлены"}</p>
-                    {activeCount > 0 && <button className="btn btn-glass btn-sm" onClick={resetFilters}>Сбросить фильтры</button>}
+                <div className="filter-sidebar-body">
+                  <div className="filter-field">
+                    <label>Вид средства</label>
+                    <HierTypeExpanded sel={filters.typeSel} onChange={setType} types={opt.types} />
                   </div>
-                ) : (
-                  <div className="grid">
-                    {filteredProducts.map(p => (
-                      <div key={p.id} className="card" onClick={() => openProduct(p)}>
-                        <div className="card-media">
-                          {p.product_type && <span className="card-type">{p.product_type}</span>}
-                          {p.image_url
-                            ? <img src={p.image_url} alt={p.brand || ""} />
-                            : <div className="pt-ph" style={{ width: "70%", height: "82%", "--tint": typeTint(p.product_type) }} aria-hidden="true">
-                                <svg viewBox="0 0 40 48" width="100%" height="100%">
-                                  <rect x="13" y="2" width="14" height="6" rx="2" fill="var(--tint)" opacity="0.85" />
-                                  <rect x="8" y="8" width="24" height="38" rx="7" fill="var(--tint)" opacity="0.16" stroke="var(--tint)" strokeOpacity="0.35" strokeWidth="1" />
-                                  <text x="20" y="32" textAnchor="middle" fontFamily="Familjen Grotesk, sans-serif" fontWeight="600" fontSize="16" fill="var(--tint)">{brandInitial(p)}</text>
-                                </svg>
-                              </div>
-                          }
-                        </div>
-                        <div className="card-body">
-                          {p.name && <div className="card-name">{p.name}</div>}
-                          {p.brand && <div className="card-brand">{p.brand}</div>}
-                          <div className="card-fns">
-                            {productAttributes(p).map((a, i) => (
-                              <span key={i} className={`fn-glass ${a.strong ? "" : "soft"}`} style={{ "--fn": a.hue }}>{a.text}</span>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
+                  {filterControls}
+                </div>
+              </aside>
+
+              <div className="products-main">
+                <div className="toolbar">
+                  <input className="search" placeholder="Поиск по названию или бренду…" value={search} onChange={e => setSearch(e.target.value)} />
+                  {/* Мобайл: фильтры дропдауном по кнопке (на десктопе кнопка скрыта) */}
+                  <button className={`btn btn-sm ${activeCount ? "btn-primary" : "btn-glass"} filter-toggle`} onClick={() => setFiltersOpen(o => !o)}>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ marginRight: 6, verticalAlign: "-2px" }}>
+                      <path d="M1 2h12M3 7h8M5 12h4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                    </svg>
+                    Фильтры{activeCount ? ` · ${activeCount}` : ""}
+                  </button>
+                </div>
+
+                {filtersOpen && (
+                  <div className="filter-panel">
+                    <div className="filter-field">
+                      <label>Вид средства</label>
+                      <HierType value={filters.type} sel={filters.typeSel} onChange={setType} types={opt.types} />
+                    </div>
+                    {filterControls}
+                    {activeCount > 0 && <button className="filter-reset" onClick={resetFilters}>Сбросить</button>}
+                  </div>
+                )}
+
+                {activeCount > 0 && (
+                  <div className="filter-chips">
+                    {filters.type && <span className="chip" onClick={() => setType(null)}>{filters.type} ✕</span>}
+                    {filters.fn && <span className="chip" onClick={() => setFilters(f => ({ ...f, fn: "" }))}>{FN_KEYS[filters.fn]} ✕</span>}
+                    {filters.scalp && <span className="chip" onClick={() => setFilters(f => ({ ...f, scalp: "" }))} style={{ textTransform: "capitalize" }}>Кожа: {filters.scalp} ✕</span>}
+                    {filters.wash && <span className="chip" onClick={() => setFilters(f => ({ ...f, wash: "" }))}>{filters.wash} ✕</span>}
+                    {filters.price && <span className="chip" onClick={() => setFilters(f => ({ ...f, price: "" }))} style={{ textTransform: "capitalize" }}>{filters.price} ✕</span>}
+                    {FLAGS.filter(f => filters.flags[f.id]).map(f => (
+                      <span key={f.id} className="chip" onClick={() => toggleFlag(f.id)}>{f.label} ✕</span>
                     ))}
                   </div>
                 )}
-            </>
+
+                <div className="section-head">
+                  <div className="section-title">Косметические средства</div>
+                  <div className="ing-head-right">
+                    <select className="sim-select ing-sort" value={prodSort} onChange={e => setProdSort(e.target.value)}>
+                      <option value="recommend">Рекомендации</option>
+                      <option value="date">По дате добавления</option>
+                      <option value="price">По цене</option>
+                      <option value="name">По названию</option>
+                      <option value="type">По группам</option>
+                      <option value="brand">По бренду</option>
+                    </select>
+                    <div className="count">{filteredProducts.length} позиций</div>
+                  </div>
+                </div>
+                {loading ? <LoadingMascot />
+                  : filteredProducts.length === 0 ? (
+                    <div className="empty-state">
+                      <span className="empty-ic">◇</span>
+                      <p>{search || activeCount ? "Ничего не найдено по выбранным фильтрам" : "Средства ещё не добавлены"}</p>
+                      {activeCount > 0 && <button className="btn btn-glass btn-sm" onClick={resetFilters}>Сбросить фильтры</button>}
+                    </div>
+                  ) : (
+                    <div className="grid">
+                      {filteredProducts.map(p => (
+                        <div key={p.id} className="card" onClick={() => openProduct(p)}>
+                          <div className="card-media">
+                            {p.product_type && <span className="card-type">{p.product_type}</span>}
+                            {p.image_url
+                              ? <img src={p.image_url} alt={p.brand || ""} />
+                              : <div className="pt-ph" style={{ width: "70%", height: "82%", "--tint": typeTint(p.product_type) }} aria-hidden="true">
+                                  <svg viewBox="0 0 40 48" width="100%" height="100%">
+                                    <rect x="13" y="2" width="14" height="6" rx="2" fill="var(--tint)" opacity="0.85" />
+                                    <rect x="8" y="8" width="24" height="38" rx="7" fill="var(--tint)" opacity="0.16" stroke="var(--tint)" strokeOpacity="0.35" strokeWidth="1" />
+                                    <text x="20" y="32" textAnchor="middle" fontFamily="Familjen Grotesk, sans-serif" fontWeight="600" fontSize="16" fill="var(--tint)">{brandInitial(p)}</text>
+                                  </svg>
+                                </div>
+                            }
+                          </div>
+                          <div className="card-body">
+                            {p.name && <div className="card-name">{p.name}</div>}
+                            {p.brand && <div className="card-brand">{p.brand}</div>}
+                            <div className="card-fns">
+                              {productAttributes(p).map((a, i) => (
+                                <span key={i} className={`fn-glass ${a.strong ? "" : "soft"}`} style={{ "--fn": a.hue }}>{a.text}</span>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+              </div>
+            </div>
           )}
 
           {tab === "ingredients" && (
@@ -2345,6 +2437,48 @@ function HierType({ value, sel, onChange, types = [] }) {
         </div>
       )}
     </div>
+  );
+}
+
+// Развёрнутый список фильтра по виду средства — для десктопного сайдбара.
+// Вся иерархия раскрыта сразу, применение по клику без кнопки «Применить».
+function HierTypeExpanded({ sel, onChange, types = [] }) {
+  const rest = types.filter(t => !TYPE_TREE_KNOWN.has(t));
+  const isActive = (label, sheet) => !!sel && sel.label === label && (sel.sheet || null) === (sheet || null);
+  const groups = PRODUCT_TYPE_TREE
+    .map(g => ({ ...g, subs: g.subs.map(s => ({ ...s, types: s.types.filter(t => types.includes(t)) })).filter(s => s.types.length) }))
+    .filter(g => g.subs.length);
+  return (
+    <nav className="hier-tree">
+      <div className={`hier-tree-root ${!sel ? "active" : ""}`} onClick={() => onChange(null)}>Все виды</div>
+      {groups.map(g => (
+        <div key={g.group} className="hier-tree-group">
+          <div className="hier-tree-group-head">
+            <span className="hier-ic">{HIER_ICONS[g.group]}</span>{g.group}
+          </div>
+          {g.subs.map(s => (
+            <div key={s.label} className="hier-tree-sub">
+              <div className={`hier-tree-sub-head ${isActive(s.label, g.sheet) ? "active" : ""}`}
+                title="Выбрать всю подгруппу"
+                onClick={() => onChange({ label: s.label, sheet: g.sheet, types: s.types })}>{s.label}</div>
+              {s.types.map(t => (
+                <div key={t} className={`hier-tree-item ${isActive(t, g.sheet) ? "active" : ""}`}
+                  onClick={() => onChange({ label: t, sheet: g.sheet, types: [t] })}>{t}</div>
+              ))}
+            </div>
+          ))}
+        </div>
+      ))}
+      {rest.length > 0 && (
+        <div className="hier-tree-group">
+          <div className="hier-tree-group-head"><span className="hier-ic">{HIER_ICONS["Прочее"]}</span>Прочее</div>
+          {rest.map(t => (
+            <div key={t} className={`hier-tree-item ${isActive(t, null) ? "active" : ""}`}
+              onClick={() => onChange({ label: t, sheet: null, types: [t] })}>{t}</div>
+          ))}
+        </div>
+      )}
+    </nav>
   );
 }
 
@@ -4052,7 +4186,18 @@ function LoginScreen({ onSuccess, onShowRegister, onBack }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [shut, setShut] = useState(false);
+
+  const forgotPassword = async () => {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setError("Введите почту, и мы отправим ссылку для сброса пароля"); return;
+    }
+    setBusy(true); setError(""); setInfo("");
+    try { await sendRecovery(email.trim()); setInfo("Отправили письмо со ссылкой для сброса пароля"); }
+    catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
 
   // понятные сообщения вместо технических ответов Supabase
   const humanError = (msg) => {
@@ -4101,6 +4246,7 @@ function LoginScreen({ onSuccess, onShowRegister, onBack }) {
           <p className="login3-sub">Войдите, чтобы продолжить</p>
 
           {error && <div className="login3-error">{error}</div>}
+          {info && <div className="login3-info">{info}</div>}
 
           <div className="login3-field">
             <label className="login3-label" htmlFor="login-email">Почта</label>
@@ -4121,16 +4267,15 @@ function LoginScreen({ onSuccess, onShowRegister, onBack }) {
             <span>{busy ? "Заходим…" : "Войти"}</span>
           </button>
 
-          {(onShowRegister || onBack) && (
-            <div className="login3-links">
-              {onShowRegister && (
-                <div>Нет аккаунта? <button className="login3-link" onClick={onShowRegister}>Зарегистрироваться</button></div>
-              )}
-              {onBack && (
-                <button className="login3-link login3-link-muted" onClick={onBack}>← На главную</button>
-              )}
-            </div>
-          )}
+          <div className="login3-links">
+            <button className="login3-link login3-link-muted" onClick={forgotPassword} disabled={busy}>Забыли пароль?</button>
+            {onShowRegister && (
+              <div>Нет аккаунта? <button className="login3-link" onClick={onShowRegister}>Зарегистрироваться</button></div>
+            )}
+            {onBack && (
+              <button className="login3-link login3-link-muted" onClick={onBack}>← На главную</button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -4319,16 +4464,19 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
 }
 
 // Плашка согласия на cookie — показывается при первом заходе, до согласия.
-// Текст и механика по инструкции юриста: отдельный пустой чекбокс «даю согласие».
+// Дата согласия хранится в localStorage устройства; после входа дублируется
+// в профиль пользователя (user_metadata) — см. syncCookieConsent.
 function CookieConsent() {
   const [shown, setShown] = useState(() => {
     try { return !localStorage.getItem("bh_cookie_consent"); } catch { return true; }
   });
-  const [agree, setAgree] = useState(false);
   if (!shown) return null;
 
   const accept = () => {
-    try { localStorage.setItem("bh_cookie_consent", new Date().toISOString()); } catch { /* приватный режим */ }
+    const ts = new Date().toISOString();
+    try { localStorage.setItem("bh_cookie_consent", ts); } catch { /* приватный режим */ }
+    // залогиненному — сразу в профиль
+    if (ACCESS_TOKEN) updateUserProfile({ consent_cookie: ts }).catch(() => {});
     setShown(false);
   };
 
@@ -4341,13 +4489,19 @@ function CookieConsent() {
         на обработку своих персональных данных в соответствии с{" "}
         <a className="reg-consent-link" href={LEGAL.policy} target="_blank" rel="noopener noreferrer">Политикой</a>.
       </div>
-      <label className="reg-consent cookie-agree">
-        <input type="checkbox" checked={agree} onChange={e => setAgree(e.target.checked)} />
-        <span>даю согласие</span>
-      </label>
-      <button className="btn btn-primary btn-sm" disabled={!agree} onClick={accept}>Принять</button>
+      <button className="btn btn-primary btn-sm" onClick={accept}>Принять</button>
     </div>
   );
+}
+
+// После входа переносим cookie-согласие с устройства в профиль пользователя,
+// чтобы факт согласия был привязан к аккаунту, а не только к браузеру.
+function syncCookieConsent() {
+  try {
+    const ts = localStorage.getItem("bh_cookie_consent");
+    if (ts && ACCESS_TOKEN && !CURRENT_USER?.user_metadata?.consent_cookie)
+      updateUserProfile({ consent_cookie: ts }).catch(() => {});
+  } catch { /* localStorage недоступен */ }
 }
 
 // Модал покупки подписки (CloudPayments) — стиль боевых модалок.
