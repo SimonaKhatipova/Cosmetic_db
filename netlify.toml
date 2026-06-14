@@ -1,0 +1,12 @@
+# Конфигурация деплоя на Netlify
+# Сборка Vite → dist/, SPA-редирект, чтобы прямые ссылки не давали 404.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Любой путь отдаём index.html (React-приложение само разбирает маршрут).
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
