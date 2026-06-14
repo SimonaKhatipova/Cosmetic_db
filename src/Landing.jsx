@@ -128,19 +128,49 @@ function FlowersBg() {
 }
 
 /* ════════════════════════════════════════
-   NAVBAR — лаконичное стеклянное меню (только Beauty Helper)
+   NAVBAR — лаконичное стеклянное меню
 ════════════════════════════════════════ */
-function Navbar({ onLogin, onRegister, onPricing }) {
-  const goHome = () => { window.location.hash = ""; window.scrollTo({ top: 0, behavior: "smooth" }); };
+/* Пункты меню: страница про меня + 2 услуги (свои лендинги позже).
+   В шапке остаётся только бренд «Beauty Helper» — заголовки продуктов сюда не выносим. */
+const NAV_ITEMS = [
+  { key: "about",     label: "О Симоне" },
+  { key: "intensive", label: "Интенсив" },
+  { key: "consult",   label: "Консультация" },
+];
+
+function Navbar({ page = "main", onNav, onLogin, onRegister, onPricing }) {
+  const [open, setOpen] = useState(false);
+  const nav = (k) => { setOpen(false); onNav(k); };
+  const pricing = () => { setOpen(false); onPricing(); };
   return (
     <nav className="lp-nav">
-      <div className="lp-brand" onClick={goHome}>Beauty Helper</div>
+      <div className="lp-brand" onClick={() => nav("main")}>Beauty Helper</div>
       <div style={{ flex: 1 }} />
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <button className="lp-nav-btn lp-pricing-link" onClick={onPricing}>Тарифы</button>
+
+      {/* Десктоп: пункты в ряд */}
+      <div className="lp-nav-links">
+        {NAV_ITEMS.map(it => (
+          <button key={it.key} className={`lp-nav-link ${page === it.key ? "active" : ""}`} onClick={() => nav(it.key)}>{it.label}</button>
+        ))}
+        <button className="lp-nav-link" onClick={pricing}>Тарифы</button>
+        <span style={{ width: 4 }} />
         <button className="lp-nav-btn lp-login" onClick={onLogin}>Войти</button>
         <button className="lp-nav-btn lp-try" onClick={onRegister}>Попробовать</button>
       </div>
+
+      {/* Мобайл: бургер */}
+      <button className="lp-burger" onClick={() => setOpen(o => !o)} aria-label="Меню">{open ? "✕" : "☰"}</button>
+      {open && (
+        <div className="lp-drawer">
+          {NAV_ITEMS.map(it => (
+            <button key={it.key} className={`lp-drawer-link ${page === it.key ? "active" : ""}`} onClick={() => nav(it.key)}>{it.label}</button>
+          ))}
+          <button className="lp-drawer-link" onClick={pricing}>Тарифы</button>
+          <div className="lp-drawer-div" />
+          <button className="lp-nav-btn lp-login" onClick={() => { setOpen(false); onLogin(); }}>Войти</button>
+          <button className="lp-nav-btn lp-try" onClick={() => { setOpen(false); onRegister(); }}>Попробовать</button>
+        </div>
+      )}
     </nav>
   );
 }
@@ -465,25 +495,19 @@ function Hero({ onRegister, onScrollPricing }) {
           </div>
 
           {/* Статистика — цифры читаются хорошо */}
-          <div className="lp-stats" style={{
-            display: "flex", gap: 0, flexWrap: "wrap",
-            paddingTop: 30, borderTop: `1px solid ${C.line}`,
-          }}>
+          <div className="lp-stats" style={{ paddingTop: 30, borderTop: `1px solid ${C.line}` }}>
             {[
               { value: "20 000+", label: "ингредиентов в базе" },
               { value: "1 200+",  label: "средств в каталоге" },
               { value: "20+",     label: "типов средств" },
               { value: "100%",    label: "составов на русском" },
-            ].map(({ value, label }, i, arr) => (
-              <div key={label} className="lp-stat" style={{
-                paddingRight: 28, marginRight: 28,
-                borderRight: i < arr.length - 1 ? `1px solid ${C.line}` : "none",
-              }}>
+            ].map(({ value, label }) => (
+              <div key={label} className="lp-stat">
                 <div style={{
-                  fontSize: "clamp(24px, 2.4vw, 34px)", fontWeight: 800, color: C.accent,
-                  letterSpacing: "-0.03em",
+                  fontSize: "clamp(22px, 2.2vw, 32px)", fontWeight: 800, color: C.accent,
+                  letterSpacing: "-0.03em", lineHeight: 1.1,
                 }}>{value}</div>
-                <div style={{ fontSize: 12.5, color: C.inkFaint, marginTop: 3 }}>{label}</div>
+                <div style={{ fontSize: 12.5, color: C.inkFaint, marginTop: 4, lineHeight: 1.3 }}>{label}</div>
               </div>
             ))}
           </div>
@@ -1175,7 +1199,7 @@ function CTASection({ onRegister }) {
 /* ════════════════════════════════════════
    FOOTER
 ════════════════════════════════════════ */
-function Footer({ onLogin, onPricing }) {
+function Footer({ onLogin, onNav, onPricing }) {
   const docLink = { fontSize: 12, color: C.inkFaint, textDecoration: "underline", textUnderlineOffset: 2 };
   const navLink = { fontSize: 13, color: C.inkSoft, cursor: "pointer", background: "none", border: "none", padding: 0, textAlign: "left", fontFamily: C.font };
   const head = { fontSize: 11, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: C.inkFaint, marginBottom: 12 };
@@ -1201,11 +1225,14 @@ function Footer({ onLogin, onPricing }) {
           <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 8 }}>by Simona · 2026</div>
         </div>
 
-        {/* навигация */}
+        {/* навигация по разделам */}
         <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
           <div style={head}>Разделы</div>
+          <button onClick={() => onNav("main")} style={navLink}>Главная</button>
+          <button onClick={() => onNav("about")} style={navLink}>О Симоне</button>
+          <button onClick={() => onNav("intensive")} style={navLink}>Интенсив</button>
+          <button onClick={() => onNav("consult")} style={navLink}>Консультация</button>
           <button onClick={onPricing} style={navLink}>Тарифы</button>
-          <button onClick={onLogin} style={navLink}>Войти</button>
         </div>
 
         {/* юридические документы */}
@@ -1239,11 +1266,328 @@ function Footer({ onLogin, onPricing }) {
 }
 
 /* ════════════════════════════════════════
+   ДОП. ЛЕНДИНГИ (личность / интенсив / консультация)
+   Тексты — черновые заглушки в фирменном стиле. Симона заменит их
+   материалами из Таплинка. Структура и дизайн готовы.
+════════════════════════════════════════ */
+
+// Отправить заявку на почту (пока нет системы записи)
+const applyMailto = (topic) => {
+  const subject = encodeURIComponent(`Заявка: ${topic}`);
+  const body = encodeURIComponent(`Здравствуйте! Хочу узнать подробнее про «${topic}».`);
+  window.location.href = `mailto:${LEGAL.ownerEmail}?subject=${subject}&body=${body}`;
+};
+
+function PageCTA({ children, onClick, variant }) {
+  const primary = variant !== "ghost";
+  return (
+    <button onClick={onClick} style={{
+      fontFamily: C.font, fontWeight: 700, fontSize: 15,
+      padding: "13px 28px", borderRadius: 12, cursor: "pointer",
+      border: primary ? "none" : `1.5px solid ${C.accent}`,
+      background: primary ? C.accentD : C.accentBg,
+      color: primary ? "#fff" : C.accent,
+      boxShadow: primary ? "0 4px 16px rgba(10,74,53,0.26)" : "none",
+    }}>{children}</button>
+  );
+}
+
+function DraftChip() {
+  return (
+    <div style={{
+      display: "inline-flex", alignItems: "center", gap: 7, marginBottom: 18,
+      fontSize: 12, fontWeight: 700, color: "#8a6a1f",
+      background: "rgba(202,162,74,0.16)", border: "1px solid rgba(202,162,74,0.4)",
+      borderRadius: 100, padding: "6px 13px",
+    }}>
+      🚧 Раздел дополняется — скоро здесь будут детали и запись
+    </div>
+  );
+}
+
+function PageHero({ label, title, lead, draft, children }) {
+  return (
+    <section style={{ padding: "128px clamp(1.5rem, 6vw, 4rem) 52px", position: "relative" }}>
+      <div style={{ maxWidth: 820, margin: "0 auto", textAlign: "center" }}>
+        {draft && <DraftChip />}
+        <div style={{ display: "flex", justifyContent: "center" }}><SectionLabel color={C.accentS}>{label}</SectionLabel></div>
+        <h1 style={{
+          fontFamily: C.serif, fontSize: "clamp(2.3rem, 5vw, 4rem)", fontWeight: 700, fontStyle: "italic",
+          color: C.ink, lineHeight: 1.08, letterSpacing: "-0.022em", margin: "0 0 20px",
+        }}>{title}</h1>
+        {lead && <p style={{ fontSize: 17, color: C.inkSoft, lineHeight: 1.7, maxWidth: 640, margin: "0 auto 30px" }}>{lead}</p>}
+        {children && <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>{children}</div>}
+      </div>
+    </section>
+  );
+}
+
+function Band({ children, max = 1100 }) {
+  return (
+    <section style={{ padding: "52px clamp(1.5rem, 6vw, 4rem)" }}>
+      <div style={{ maxWidth: max, margin: "0 auto" }}>{children}</div>
+    </section>
+  );
+}
+
+function BandTitle({ label, title }) {
+  return (
+    <div style={{ textAlign: "center", marginBottom: 34 }}>
+      <div style={{ display: "flex", justifyContent: "center" }}><SectionLabel color={C.accentS}>{label}</SectionLabel></div>
+      <h2 style={{
+        fontFamily: C.serif, fontSize: "clamp(1.7rem, 3.4vw, 2.5rem)", fontWeight: 600, fontStyle: "italic",
+        color: C.ink, letterSpacing: "-0.02em", margin: 0,
+      }}>{title}</h2>
+    </div>
+  );
+}
+
+function CardGrid({ children, min = 240 }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(${min}px, 1fr))`, gap: 18 }}>{children}</div>
+  );
+}
+
+function InfoCard({ icon, title, text, cta, onClick }) {
+  return (
+    <div onClick={onClick} style={{
+      background: C.glass, border: `1px solid ${C.glassBd}`, borderRadius: 18,
+      padding: "26px 24px", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)",
+      boxShadow: C.shadowSm, cursor: onClick ? "pointer" : "default",
+      display: "flex", flexDirection: "column",
+    }}>
+      {icon && <div style={{ fontSize: 28, marginBottom: 12 }}>{icon}</div>}
+      <div style={{ fontFamily: "'Familjen Grotesk', sans-serif", fontWeight: 700, fontSize: 17, color: C.ink, marginBottom: 8, letterSpacing: "-0.01em" }}>{title}</div>
+      <div style={{ fontSize: 14, color: C.inkSoft, lineHeight: 1.6, flex: 1 }}>{text}</div>
+      {cta && <div style={{ marginTop: 14, color: C.accent, fontWeight: 700, fontSize: 14 }}>{cta} →</div>}
+    </div>
+  );
+}
+
+function Steps({ items }) {
+  return (
+    <div style={{ maxWidth: 740, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14 }}>
+      {items.map((s, i) => (
+        <div key={i} style={{
+          display: "flex", gap: 16, alignItems: "flex-start",
+          background: C.glass, border: `1px solid ${C.glassBd}`, borderRadius: 16,
+          padding: "18px 20px", boxShadow: C.shadowSm,
+        }}>
+          <div style={{
+            flexShrink: 0, width: 32, height: 32, borderRadius: 10, background: C.accentBg,
+            color: C.accent, fontWeight: 800, fontSize: 15, display: "flex", alignItems: "center", justifyContent: "center",
+          }}>{i + 1}</div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 15.5, color: C.ink, marginBottom: 4 }}>{s.t}</div>
+            <div style={{ fontSize: 14, color: C.inkSoft, lineHeight: 1.6 }}>{s.d}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PageCTABand({ title, text, ctaText, onCta }) {
+  return (
+    <section style={{ padding: "40px clamp(1.5rem, 6vw, 4rem) 80px" }}>
+      <div style={{
+        maxWidth: 720, margin: "0 auto", textAlign: "center",
+        background: "linear-gradient(135deg, rgba(15,107,77,0.08), rgba(42,155,115,0.05))",
+        border: `1px solid ${C.glassBd}`, borderRadius: 24, padding: "44px clamp(1.5rem, 5vw, 3rem)",
+        boxShadow: C.shadowSm,
+      }}>
+        <h2 style={{ fontFamily: C.serif, fontSize: "clamp(1.6rem, 3vw, 2.2rem)", fontWeight: 600, fontStyle: "italic", color: C.ink, letterSpacing: "-0.02em", margin: "0 0 14px" }}>{title}</h2>
+        <p style={{ fontSize: 15.5, color: C.inkSoft, lineHeight: 1.65, maxWidth: 520, margin: "0 auto 26px" }}>{text}</p>
+        <PageCTA onClick={onCta}>{ctaText}</PageCTA>
+      </div>
+    </section>
+  );
+}
+
+/* ── О Симоне (личный бренд) ── */
+function AboutPage({ onRegister }) {
+  return (
+    <>
+      <PageHero
+        label="Кто за этим стоит"
+        title={<>Привет, я Симона</>}
+        lead="Я делаю Beauty Helper сама: от идеи и составов до кода и текстов. Верю, что разобраться в уходе может каждый — без химического образования и дорогих консультаций."
+      >
+        <PageCTA onClick={onRegister}>Открыть сервис</PageCTA>
+        <PageCTA variant="ghost" onClick={() => applyMailto("вопрос Симоне")}>Написать мне</PageCTA>
+      </PageHero>
+
+      <Band max={760}>
+        <p style={{ fontSize: 16.5, color: C.inkSoft, lineHeight: 1.8, marginBottom: 18 }}>
+          Когда-то я сама стояла перед полкой с десятком баночек и не понимала, что из этого реально работает, а что — красивая упаковка. Стала разбираться в составах, читать INCI, сравнивать средства. Оказалось, за непонятными словами прячется простая логика.
+        </p>
+        <p style={{ fontSize: 16.5, color: C.inkSoft, lineHeight: 1.8 }}>
+          Так появился Beauty Helper — чтобы каждый мог расшифровать состав на русском, понять, что к чему, и собрать схему ухода, которая даёт результат. Здесь — черновой текст, скоро заменю его настоящей историей.
+        </p>
+      </Band>
+
+      <Band>
+        <BandTitle label="Коротко" title="Несколько фактов обо мне" />
+        <CardGrid min={210}>
+          <InfoCard icon="🧪" title="Изучаю составы" text="Разбираю INCI и слежу за исследованиями, чтобы советы опирались на факты, а не на маркетинг." />
+          <InfoCard icon="💚" title="За осознанный уход" text="Меньше импульсивных покупок, больше понимания — что и зачем вы наносите на кожу и волосы." />
+          <InfoCard icon="👩‍💻" title="Соло-проект" text="Делаю продукт одна и слушаю обратную связь от первых пользователей напрямую." />
+          <InfoCard icon="✍️" title="Делюсь знаниями" text="Простым языком рассказываю про уход — в сервисе, на интенсиве и консультациях." />
+        </CardGrid>
+      </Band>
+
+      <Band>
+        <BandTitle label="Чем могу помочь" title="Три способа разобраться в уходе" />
+        <CardGrid>
+          <InfoCard icon="🔍" title="Сервис Beauty Helper" text="Каталог средств, расшифровка составов и сравнение. Бесплатно." cta="Открыть" onClick={onRegister} />
+          <InfoCard icon="🎓" title="Интенсив" text="Научу читать составы и собирать уход самостоятельно, по шагам." cta="Подробнее" onClick={() => { window.location.hash = "/intensive"; }} />
+          <InfoCard icon="💬" title="Консультация" text="Разберём именно вашу ситуацию и соберём персональную схему." cta="Подробнее" onClick={() => { window.location.hash = "/consult"; }} />
+        </CardGrid>
+      </Band>
+
+      <PageCTABand
+        title="Начнём с бесплатного сервиса"
+        text="Создайте аккаунт и попробуйте: поиск по каталогу, расшифровка составов и сравнение средств."
+        ctaText="Попробовать бесплатно" onCta={onRegister}
+      />
+    </>
+  );
+}
+
+/* ── Интенсив ── */
+function IntensivePage({ onRegister }) {
+  const modules = [
+    { t: "INCI без страха", d: "Как устроен состав, почему порядок ингредиентов важен и что значат непонятные слова." },
+    { t: "Что реально работает", d: "Активы, базовые и вспомогательные компоненты: на что смотреть, а что — маркетинг." },
+    { t: "Собираем уход", d: "Как составить рабочую схему для лица и волос под свои задачи и не переплачивать." },
+    { t: "Разбор полок", d: "Смотрим на реальные средства, сравниваем составы и принимаем решения вместе." },
+  ];
+  return (
+    <>
+      <PageHero
+        label="Обучение"
+        title={<>Интенсив по составам<br />косметики</>}
+        lead="Несколько занятий, после которых вы сами читаете любой состав и собираете уход, который работает. Без воды и химического образования."
+        draft
+      >
+        <PageCTA onClick={() => applyMailto("интенсив по составам")}>Оставить заявку</PageCTA>
+        <PageCTA variant="ghost" onClick={onRegister}>Сначала попробовать сервис</PageCTA>
+      </PageHero>
+
+      <Band max={780}>
+        <BandTitle label="Программа" title="Что будет внутри" />
+        <Steps items={modules} />
+      </Band>
+
+      <Band>
+        <BandTitle label="Для кого" title="Кому подойдёт интенсив" />
+        <CardGrid min={230}>
+          <InfoCard icon="🛍️" title="Устали от пустых трат" text="Хотите перестать покупать баночки наугад и выбирать осознанно." />
+          <InfoCard icon="🤔" title="Теряетесь в составах" text="Видите длинный список INCI и не понимаете, хороший это продукт или нет." />
+          <InfoCard icon="💁‍♀️" title="Хотите системность" text="Нужна не разовая подсказка, а навык — разбираться самостоятельно." />
+        </CardGrid>
+      </Band>
+
+      <Band max={720}>
+        <BandTitle label="Формат" title="Как всё устроено" />
+        <CardGrid min={200}>
+          <InfoCard icon="🗓️" title="Формат" text="Онлайн, в удобном темпе. Детали уточняются." />
+          <InfoCard icon="⏱️" title="Длительность" text="Несколько занятий с практикой. Скоро укажу точно." />
+          <InfoCard icon="🏷️" title="Стоимость" text="Появится здесь. Оставьте заявку — напишу первым." />
+        </CardGrid>
+      </Band>
+
+      <PageCTABand
+        title="Хочу на интенсив"
+        text="Оставьте заявку — я напишу вам, как только откроется набор, и отвечу на вопросы."
+        ctaText="Оставить заявку" onCta={() => applyMailto("интенсив по составам")}
+      />
+    </>
+  );
+}
+
+/* ── Консультация ── */
+function ConsultPage({ onRegister }) {
+  const steps = [
+    { t: "Заявка", d: "Вы оставляете заявку и коротко описываете, что хотите решить." },
+    { t: "Анкета", d: "Заполняете анкету о коже, волосах и текущем уходе — чтобы я подготовилась." },
+    { t: "Встреча", d: "Разбираем вашу ситуацию, составы средств и подбираем рабочую схему." },
+    { t: "Схема ухода", d: "Вы получаете понятный план: что, когда и зачем наносить." },
+  ];
+  return (
+    <>
+      <PageHero
+        label="Персонально"
+        title={<>Личная консультация<br />по уходу</>}
+        lead="Разберём именно вашу ситуацию: тип кожи и волос, текущие средства и задачи. На выходе — персональная схема ухода, которая работает."
+        draft
+      >
+        <PageCTA onClick={() => applyMailto("консультация по уходу")}>Записаться на консультацию</PageCTA>
+        <PageCTA variant="ghost" onClick={onRegister}>Сначала попробовать сервис</PageCTA>
+      </PageHero>
+
+      <Band max={780}>
+        <BandTitle label="Как проходит" title="Четыре шага до вашей схемы" />
+        <Steps items={steps} />
+      </Band>
+
+      <Band>
+        <BandTitle label="Результат" title="Что вы получите" />
+        <CardGrid min={230}>
+          <InfoCard icon="🧴" title="Понятный уход" text="Конкретные шаги для лица и волос — без лишних средств." />
+          <InfoCard icon="🔬" title="Разбор средств" text="Посмотрим, что у вас уже есть, и оставим только рабочее." />
+          <InfoCard icon="🎯" title="Под ваши задачи" text="Схема под вашу кожу, волосы и цели, а не универсальный шаблон." />
+        </CardGrid>
+      </Band>
+
+      <Band max={720}>
+        <BandTitle label="Запись" title="Стоимость и формат" />
+        <CardGrid min={200}>
+          <InfoCard icon="💻" title="Формат" text="Онлайн-встреча. Детали согласуем после заявки." />
+          <InfoCard icon="🏷️" title="Стоимость" text="Уточняется. Оставьте заявку — расскажу подробно." />
+          <InfoCard icon="📄" title="После встречи" text="Письменная схема ухода, чтобы ничего не забыть." />
+        </CardGrid>
+      </Band>
+
+      <PageCTABand
+        title="Записаться на консультацию"
+        text="Оставьте заявку — я свяжусь с вами, отвечу на вопросы и расскажу про ближайшие даты."
+        ctaText="Записаться" onCta={() => applyMailto("консультация по уходу")}
+      />
+    </>
+  );
+}
+
+/* ════════════════════════════════════════
    ЭКСПОРТ
 ════════════════════════════════════════ */
+// Хеш-роутинг: меню переключает доп.страницы (свои продукты), ссылки шарятся.
+const PAGE_ROUTES = ["about", "intensive", "consult"];
+function pageFromHash() {
+  const h = (window.location.hash || "").replace(/^#\/?/, "");
+  return PAGE_ROUTES.includes(h) ? h : "main";
+}
+
 export default function Landing({ onLogin, onRegister, onPurchase }) {
   const pricingRef = useRef(null);
+  const [page, setPage] = useState(pageFromHash);
+
+  useEffect(() => {
+    const onHash = () => { setPage(pageFromHash()); window.scrollTo({ top: 0 }); };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  const go = (key) => {
+    const target = key === "main" ? "/" : "/" + key;
+    if (window.location.hash === "#" + target) { window.scrollTo({ top: 0 }); return; }
+    window.location.hash = target;
+  };
   const scrollToPricing = () => pricingRef.current?.scrollIntoView({ behavior: "smooth" });
+  const onPricing = () => {
+    if (page !== "main") { go("main"); setTimeout(scrollToPricing, 90); }
+    else scrollToPricing();
+  };
 
   return (
     <div style={{
@@ -1281,55 +1625,72 @@ export default function Landing({ onLogin, onRegister, onPurchase }) {
           position: fixed; top: 0; left: 0; right: 0; z-index: 200;
           height: 60px; display: flex; align-items: center;
           padding: 0 clamp(1rem, 5vw, 4rem);
-          background: rgba(255,255,255,0.5);
-          backdrop-filter: blur(22px) saturate(160%); -webkit-backdrop-filter: blur(22px) saturate(160%);
-          border-bottom: 1px solid rgba(255,255,255,0.6);
-          box-shadow: 0 4px 24px rgba(15,75,55,0.06);
+          background: rgba(247,251,249,0.72);
+          backdrop-filter: blur(22px) saturate(170%); -webkit-backdrop-filter: blur(22px) saturate(170%);
+          border-bottom: 1px solid rgba(255,255,255,0.7);
+          box-shadow: 0 4px 24px rgba(15,75,55,0.07);
         }
         .lp-brand {
           font-family: 'Familjen Grotesk', sans-serif; font-weight: 700;
           font-size: clamp(17px, 2.2vw, 20px); color: ${C.ink};
           letter-spacing: -0.028em; cursor: pointer;
         }
+        .lp-nav-links { display: flex; align-items: center; gap: 2px; }
+        .lp-nav-link { font-family: ${C.font}; font-weight: 600; font-size: 14px; padding: 9px 13px; border-radius: 10px; cursor: pointer; border: none; background: transparent; color: ${C.inkSoft}; white-space: nowrap; }
+        .lp-nav-link:hover { color: ${C.accent}; background: ${C.accentBg}; }
+        .lp-nav-link.active { color: ${C.accent}; background: ${C.accentBg}; font-weight: 700; }
         .lp-nav-btn { font-family: ${C.font}; font-weight: 700; font-size: 14px; border-radius: 10px; cursor: pointer; white-space: nowrap; border: none; }
-        .lp-pricing-link { padding: 9px 14px; background: transparent; color: ${C.inkSoft}; }
-        .lp-pricing-link:hover { color: ${C.accent}; }
-        .lp-login { padding: 9px 18px; background: ${C.accentBg}; color: ${C.accent}; border: 1.5px solid ${C.accent}; }
-        .lp-try { padding: 9px 18px; background: ${C.accentD}; color: #fff; box-shadow: 0 4px 14px rgba(10,74,53,0.28); }
-        @media (max-width: 600px) {
-          .lp-nav { height: 56px; }
-          .lp-pricing-link { display: none; }
-          .lp-nav-btn { font-size: 13px; }
-          .lp-login, .lp-try { padding: 8px 14px; }
-        }
-        @media (max-width: 360px) {
-          .lp-login, .lp-try { padding: 7px 11px; font-size: 12.5px; }
-        }
-        /* Hero: две колонки на десктопе, стопка на мобайле (иначе горизонтальный скролл) */
+        .lp-login { padding: 9px 16px; background: ${C.accentBg}; color: ${C.accent}; border: 1.5px solid ${C.accent}; }
+        .lp-try { padding: 9px 16px; background: ${C.accentD}; color: #fff; box-shadow: 0 4px 14px rgba(10,74,53,0.28); }
+        /* бургер — на мобайле */
+        .lp-burger { display: none; width: 42px; height: 42px; border-radius: 11px; cursor: pointer;
+          border: 1px solid ${C.line}; background: rgba(255,255,255,0.7); color: ${C.ink}; font-size: 18px;
+          align-items: center; justify-content: center; }
+        .lp-drawer { position: absolute; top: 60px; left: 0; right: 0; display: flex; flex-direction: column; gap: 4px;
+          padding: 10px clamp(1rem, 5vw, 4rem) 16px;
+          background: rgba(247,251,249,0.98); border-bottom: 1px solid ${C.line};
+          box-shadow: 0 16px 40px -12px rgba(15,75,55,0.22);
+          backdrop-filter: blur(22px) saturate(170%); -webkit-backdrop-filter: blur(22px) saturate(170%); }
+        .lp-drawer-link { font-family: ${C.font}; font-weight: 600; font-size: 15px; text-align: left; padding: 13px 14px;
+          border-radius: 10px; border: none; background: transparent; color: ${C.inkSoft}; cursor: pointer; }
+        .lp-drawer-link.active, .lp-drawer-link:hover { color: ${C.accent}; background: ${C.accentBg}; }
+        .lp-drawer-div { height: 1px; background: ${C.line}; margin: 8px 0; }
+        .lp-drawer .lp-nav-btn { text-align: center; padding: 12px 18px; }
+        .lp-drawer .lp-try { margin-top: 6px; }
         @media (max-width: 860px) {
+          .lp-nav-links { display: none; }
+          .lp-burger { display: inline-flex; }
           .lp-hero-grid { grid-template-columns: 1fr !important; }
           .lp-hero-grid > * { min-width: 0; }
         }
-        /* Метрики: 4 в ряд на десктопе, 2×2 на мобайле */
-        @media (max-width: 520px) {
-          .lp-stats { gap: 20px 0 !important; }
-          .lp-stat { flex: 0 0 50% !important; padding-right: 0 !important; margin-right: 0 !important; border-right: none !important; }
-        }
+        @media (max-width: 600px) { .lp-nav { height: 56px; } .lp-drawer { top: 56px; } }
+        /* Метрики — ровная сетка, не плывут от ширины */
+        .lp-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 22px 18px; }
+        @media (max-width: 600px) { .lp-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
       `}</style>
 
       <FlowersBg />
       <div style={{ position: "relative", zIndex: 1 }}>
-        <Navbar onLogin={onLogin} onRegister={onRegister} onPricing={scrollToPricing} />
-        <Hero onRegister={onRegister} onScrollPricing={scrollToPricing} />
-        <Problems />
-        <Solution />
-        <HowItWorks />
-        <Testimonials />
-        <div ref={pricingRef}>
-          <PricingSection onRegister={onRegister} onPurchase={onPurchase} />
-        </div>
-        <CTASection onRegister={onRegister} />
-        <Footer onLogin={onLogin} onPricing={scrollToPricing} />
+        <Navbar page={page} onNav={go} onLogin={onLogin} onRegister={onRegister} onPricing={onPricing} />
+
+        {page === "main" && (
+          <>
+            <Hero onRegister={onRegister} onScrollPricing={scrollToPricing} />
+            <Problems />
+            <Solution />
+            <HowItWorks />
+            <Testimonials />
+            <div ref={pricingRef}>
+              <PricingSection onRegister={onRegister} onPurchase={onPurchase} />
+            </div>
+            <CTASection onRegister={onRegister} />
+          </>
+        )}
+        {page === "about"     && <AboutPage onRegister={onRegister} />}
+        {page === "intensive" && <IntensivePage onRegister={onRegister} />}
+        {page === "consult"   && <ConsultPage onRegister={onRegister} />}
+
+        <Footer onLogin={onLogin} onNav={go} onPricing={onPricing} />
       </div>
     </div>
   );

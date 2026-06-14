@@ -834,9 +834,54 @@ const styles = `
   }
   .tariff-pill {
     font-size: 9px; font-weight: 800; letter-spacing: .06em; padding: 2px 6px; border-radius: 100px;
-    background: rgba(255,255,255,0.16); color: #eef4f1; border: 1px solid rgba(255,255,255,0.28);
+    background: rgba(15,107,77,0.1); color: var(--accent-deep); border: 1px solid rgba(15,107,77,0.22);
   }
   .tariff-pill.pro { background: linear-gradient(120deg,#caa24a,#e7c878); color: #3a2c08; border: none; }
+
+  /* ── Меню в правом углу шапки ── */
+  .hdr-menu { position: relative; }
+  .hdr-trigger {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    padding: 6px 10px 6px 7px; border-radius: 12px;
+    background: var(--glass); border: 1px solid var(--glass-border);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    font-family: 'Manrope', sans-serif;
+  }
+  .hdr-trigger:hover { background: var(--glass-strong); }
+  .hdr-caret { color: var(--ink-soft); transition: transform .2s; }
+  .hdr-caret.up { transform: rotate(180deg); }
+  .hdr-pop {
+    position: absolute; top: calc(100% + 8px); right: 0; z-index: 120;
+    min-width: 230px; padding: 7px;
+    background: rgba(252,254,253,0.98); border: 1px solid var(--glass-border);
+    border-radius: 16px; box-shadow: 0 20px 50px -16px rgba(10,74,53,0.4);
+    backdrop-filter: blur(20px) saturate(150%); -webkit-backdrop-filter: blur(20px) saturate(150%);
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .hdr-greet { font-size: 12px; color: var(--ink-faint); padding: 8px 12px 6px; font-weight: 600; }
+  .hdr-item {
+    text-align: left; font-family: 'Manrope', sans-serif; font-size: 14px; font-weight: 600;
+    color: var(--ink); background: none; border: none; cursor: pointer;
+    padding: 11px 12px; border-radius: 10px; transition: background .12s, color .12s;
+  }
+  .hdr-item:hover { background: color-mix(in srgb, var(--accent) 11%, transparent); color: var(--accent-deep); }
+  .hdr-item.active { color: var(--accent-deep); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .hdr-item.danger { color: var(--rose); }
+  .hdr-item.danger:hover { background: rgba(193,123,138,0.1); }
+  .hdr-div { height: 1px; background: var(--glass-border); margin: 5px 6px; }
+
+  /* ── Инфо-окна меню (услуги/миссия/поддержка) ── */
+  .info-title { font-family: 'Familjen Grotesk', sans-serif; font-size: 21px; font-weight: 700; color: var(--ink); letter-spacing: -0.02em; margin: 0 0 14px; padding-right: 30px; }
+  .info-body { font-size: 14px; color: var(--ink-soft); }
+  .info-p { line-height: 1.6; margin: 0 0 12px; }
+  .info-p b { color: var(--ink); }
+  .info-card { background: rgba(255,255,255,0.6); border: 1px solid var(--glass-border); border-radius: 14px; padding: 15px 16px; margin-top: 12px; }
+  .info-card-t { font-family: 'Familjen Grotesk', sans-serif; font-weight: 700; font-size: 15.5px; color: var(--ink); margin-bottom: 5px; }
+  .info-card-d { font-size: 13.5px; color: var(--ink-soft); line-height: 1.55; margin-bottom: 12px; }
+  .info-cta { font-family: 'Manrope', sans-serif; font-weight: 700; font-size: 13.5px; color: #fff; background: var(--accent-deep); border: none; border-radius: 11px; padding: 10px 18px; cursor: pointer; }
+  .info-cta:hover { background: var(--accent); }
+  .info-row { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; padding: 8px 0; border-top: 1px solid var(--glass-border); }
+  .info-row a { color: var(--accent); font-weight: 600; text-decoration: none; }
 
   .lk-overlay { display: flex; align-items: flex-start; justify-content: center; padding: clamp(1rem, 5vh, 3.5rem) 16px 40px; }
   .lk-card {
@@ -1016,6 +1061,9 @@ const styles = `
   }
 
   /* ── Настройки (переиспользует .lk-page / .lk-block) ── */
+  .lk-top-text { font-weight: 600; font-size: 13.5px; color: var(--ink-soft); background: rgba(255,255,255,0.55);
+    border: 1px solid var(--glass-border); border-radius: 10px; padding: 7px 14px; cursor: pointer; font-family: inherit; }
+  .lk-top-text:hover { background: rgba(255,255,255,0.85); color: var(--ink); }
   .lk-top-ico { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px;
     border-radius: 10px; border: 1px solid var(--glass-border); background: rgba(255,255,255,0.55);
     color: var(--ink-soft); font-size: 16px; cursor: pointer; }
@@ -1967,6 +2015,13 @@ const styles = `
     .tabs-bar { display: none; }
     /* контент не должен прятаться за нижней навигацией */
     .main { padding-bottom: 84px; }
+    /* каталог: 2 карточки в ряд (а не одна гигантская) */
+    .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .card-body { padding: 11px 12px 13px; }
+    .card-name { font-size: 13px; }
+    .pcard-body { padding: 8px 9px 10px; }
+    .section-title { font-size: 20px; }
+    .toolbar { gap: 8px; }
     /* ── нижняя навигация (bottom nav) ── */
     .bottom-nav {
       display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 150;
@@ -2072,6 +2127,7 @@ export default function App() {
   const [removeBgKey, setRemoveBgKey] = useState("");
   const [showKeyPanel, setShowKeyPanel] = useState(false); // панель ввода ключа remove.bg (только режим редактора)
   const [showSettings, setShowSettings] = useState(false); // страница пользовательских настроек
+  const [infoModal, setInfoModal] = useState(null);        // "services" | "mission" | "support" | null
   // freemium: тариф, использование за неделю, экран кабинета, paywall (причина|null)
   const [profile, setProfile] = useState(null);
   const [usage, setUsage] = useState({ search: 0, analysis: 0 });
@@ -2133,13 +2189,14 @@ export default function App() {
       if (showAddIngredient) return setShowAddIngredient(false);
       if (paywall) return setPaywall(null);
       if (showPurchase) return setShowPurchase(false);
+      if (infoModal) return setInfoModal(null);
       if (showSettings) return setShowSettings(false);
       if (showProfile) return setShowProfile(false);
       if (authScreen !== "landing") return setAuthScreen("landing");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [detail, selected, showAddProduct, showAddIngredient, paywall, showPurchase, showSettings, showProfile, authScreen]);
+  }, [detail, selected, showAddProduct, showAddIngredient, paywall, showPurchase, infoModal, showSettings, showProfile, authScreen]);
   // после входа: cookie-согласие в профиль, тариф и счётчики использования
   useEffect(() => {
     if (!authed) return;
@@ -2552,6 +2609,7 @@ export default function App() {
           onClose={() => setShowSettings(false)}
           onLogout={() => { signOut(); setAuthed(false); setShowSettings(false); setShowProfile(false); setAuthScreen("landing"); setShowPurchase(false); }} />
       )}
+      {infoModal && <InfoModal kind={infoModal} onClose={() => setInfoModal(null)} />}
       {paywall && (
         <Paywall reason={paywall}
           onClose={() => setPaywall(null)}
@@ -2620,22 +2678,21 @@ export default function App() {
             <div className="brand-text"><strong>beauty helper</strong><span>косметическая база · анализ составов</span></div>
           </div>
           <div className="topbar-actions">
-            {userName() && <span className="topbar-user">Привет, {userName()}</span>}
-            {isAdmin() && (
-              <button className={`btn btn-sm ${editorMode ? "btn-primary" : "btn-glass"}`} onClick={() => setEditorMode(m => !m)}>
-                {editorMode ? "✓ Режим редактора" : "Режим редактора"}
-              </button>
-            )}
+            {/* Контекстные инструменты редактора — видны только когда режим включён */}
             {isAdmin() && editorMode && tab === "products" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddProduct(true)}>+ Средство</button>}
             {isAdmin() && editorMode && tab === "ingredients" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddIngredient(true)}>+ Ингредиент</button>}
-            {/* Ключ remove.bg нужен только при добавлении средств — показываем лишь в режиме редактора */}
             {isAdmin() && editorMode && <button className="btn btn-glass btn-sm" onClick={() => setShowKeyPanel(s => !s)} title="API-ключ remove.bg">🔑</button>}
-            <button className="btn btn-glass btn-sm" onClick={() => setShowSettings(true)} title="Настройки">⚙</button>
-            <button className="btn btn-glass btn-sm profile-btn" onClick={() => setShowProfile(true)} title="Личный кабинет">
-              <span className="profile-ava">{(userName()?.[0] || "Я").toUpperCase()}</span>
-              <span className={`tariff-pill ${isPro() ? "pro" : ""}`}>{isPro() ? "PRO" : "FREE"}</span>
-            </button>
-            <button className="btn btn-glass btn-sm" onClick={() => { signOut(); setAuthed(false); setAuthScreen("landing"); setShowPurchase(false); }}>Выйти</button>
+            {/* Аккуратное меню справа: всё, что было разбросано по шапке */}
+            <HeaderMenu
+              name={userName()} pro={isPro()} admin={isAdmin()} editorMode={editorMode}
+              onProfile={() => setShowProfile(true)}
+              onSettings={() => setShowSettings(true)}
+              onToggleEditor={() => setEditorMode(m => !m)}
+              onServices={() => setInfoModal("services")}
+              onMission={() => setInfoModal("mission")}
+              onSupport={() => setInfoModal("support")}
+              onLogout={() => { signOut(); setAuthed(false); setAuthScreen("landing"); setShowPurchase(false); }}
+            />
           </div>
         </div>
 
@@ -5276,7 +5333,7 @@ function ProfileScreen({ profile, usage, pro, onClose, onSubscribe, onLogout, vi
       <div className="lk-topbar">
         <button className="lk-back" onClick={onClose}>← Каталог</button>
         <span className="lk-topbar-title">Личный кабинет</span>
-        <button className="lk-top-ico" style={{ marginLeft: "auto" }} onClick={onOpenSettings} title="Настройки">⚙</button>
+        <button className="lk-top-text" style={{ marginLeft: "auto" }} onClick={onOpenSettings}>Настройки</button>
         <button className="lk-top-logout" style={{ marginLeft: 0 }} onClick={onLogout}>Выйти</button>
       </div>
       <div className="lk-wrap">
@@ -5411,6 +5468,111 @@ function ProfileScreen({ profile, usage, pro, onClose, onSubscribe, onLogout, vi
           )}
 
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Аккуратное меню в правом углу шапки: всё, что было разбросано по кнопкам.
+// Пункты — словами. «Режим редактора» — только для владельца.
+function HeaderMenu({ name, pro, admin, editorMode, onProfile, onSettings, onToggleEditor, onServices, onMission, onSupport, onLogout }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
+  const ref = useRef(null);
+  const triggerRef = useRef(null);
+  // Поповер рендерим position:fixed от координат триггера — иначе его режет overflow:hidden шапки.
+  const toggle = () => {
+    if (!open && triggerRef.current) {
+      const r = triggerRef.current.getBoundingClientRect();
+      setPos({ top: r.bottom + 8, right: Math.max(8, window.innerWidth - r.right) });
+    }
+    setOpen(o => !o);
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const act = (fn) => { setOpen(false); fn(); };
+  return (
+    <div className="hdr-menu" ref={ref}>
+      <button className="hdr-trigger" ref={triggerRef} onClick={toggle} aria-label="Меню">
+        <span className="profile-ava">{(name?.[0] || "Я").toUpperCase()}</span>
+        <span className={`tariff-pill ${pro ? "pro" : ""}`}>{pro ? "PRO" : "FREE"}</span>
+        <svg className={`hdr-caret ${open ? "up" : ""}`} width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 4.5 6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      </button>
+      {open && pos && (
+        <div className="hdr-pop" style={{ position: "fixed", top: pos.top, right: pos.right }}>
+          {name && <div className="hdr-greet">Привет, {name}!</div>}
+          <button className="hdr-item" onClick={() => act(onProfile)}>Личный кабинет</button>
+          <button className="hdr-item" onClick={() => act(onSettings)}>Настройки</button>
+          {admin && (
+            <button className={`hdr-item ${editorMode ? "active" : ""}`} onClick={() => act(onToggleEditor)}>
+              Режим редактора{editorMode ? " · вкл" : ""}
+            </button>
+          )}
+          <div className="hdr-div" />
+          <button className="hdr-item" onClick={() => act(onServices)}>Услуги</button>
+          <button className="hdr-item" onClick={() => act(onMission)}>Миссия</button>
+          <button className="hdr-item" onClick={() => act(onSupport)}>Служба поддержки</button>
+          <div className="hdr-div" />
+          <button className="hdr-item danger" onClick={() => act(onLogout)}>Выйти</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Информационные окна из меню: услуги, миссия, поддержка.
+function InfoModal({ kind, onClose }) {
+  const mail = (subject) => { window.location.href = `mailto:${LEGAL.ownerEmail}?subject=${encodeURIComponent(subject)}`; };
+  const content = {
+    mission: {
+      title: "Миссия",
+      body: (
+        <>
+          <p className="info-p">Beauty Helper помогает осознанно выбирать косметику: расшифровать состав на русском, понять что к чему и собрать схему домашнего ухода за волосами и лицом, которая реально даёт результат.</p>
+          <p className="info-p"><b>Помочь каждому разобраться в составе и собрать уход, который работает</b> — без химического образования и дорогих консультаций.</p>
+        </>
+      ),
+    },
+    services: {
+      title: "Услуги",
+      body: (
+        <>
+          <p className="info-p">Кроме сервиса есть два формата, где я помогаю лично. Скоро у каждого появится своя страница.</p>
+          <div className="info-card">
+            <div className="info-card-t">Интенсив по составам</div>
+            <div className="info-card-d">Научу читать INCI и собирать уход самостоятельно, по шагам.</div>
+            <button className="info-cta" onClick={() => mail("Интенсив по составам")}>Оставить заявку</button>
+          </div>
+          <div className="info-card">
+            <div className="info-card-t">Личная консультация</div>
+            <div className="info-card-d">Разберём вашу ситуацию и соберём персональную схему ухода.</div>
+            <button className="info-cta" onClick={() => mail("Консультация по уходу")}>Записаться</button>
+          </div>
+        </>
+      ),
+    },
+    support: {
+      title: "Служба поддержки",
+      body: (
+        <>
+          <p className="info-p">Мы на связи. Если что-то не работает или есть вопрос — напишите, поможем разобраться.</p>
+          <div className="info-row"><span>Почта</span><a href={`mailto:${LEGAL.ownerEmail}`}>{LEGAL.ownerEmail}</a></div>
+          <button className="info-cta" style={{ marginTop: 14 }} onClick={() => mail("Вопрос в поддержку Beauty Helper")}>Написать письмо</button>
+        </>
+      ),
+    },
+  }[kind];
+  if (!content) return null;
+  return (
+    <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal" style={{ maxWidth: 440 }}>
+        <button className="lk-close" onClick={onClose} aria-label="Закрыть">✕</button>
+        <h2 className="info-title">{content.title}</h2>
+        <div className="info-body">{content.body}</div>
       </div>
     </div>
   );
