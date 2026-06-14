@@ -10,7 +10,7 @@
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Landing from "./Landing.jsx";
-import { openPaymentWidget } from "./lib/cloudpayments.js";
+// Дизайн-песочница: оплата здесь — визуальный макет (боевая логика — в App.jsx, Робокасса).
 
 /* ── Дизайн-токены ── */
 const C = {
@@ -498,32 +498,18 @@ function RegisterModal({ onClose, onSuccess, onSwitchLogin, onPurchase }) {
 }
 
 /* ════════════════════════════════════════
-   МОДАЛ ПОКУПКИ (CloudPayments)
+   МОДАЛ ПОКУПКИ (визуальный макет; боевая оплата — Робокасса в App.jsx)
 ════════════════════════════════════════ */
 function PurchaseModal({ onClose, onSuccess }) {
   const [email, setEmail]   = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError]   = useState("");
 
+  // В песочнице оплата не выполняется — просто демонстрируем состояние.
   const handlePay = () => {
     setLoading(true);
     setError("");
-    openPaymentWidget({
-      email,
-      invoiceId: `bh-${Date.now()}`,
-      onSuccess: (opts) => {
-        setLoading(false);
-        onSuccess(opts);
-      },
-      onFail: (reason) => {
-        setLoading(false);
-        if (reason === "no_public_id") {
-          setError("CloudPayments не настроен: добавьте VITE_CLOUDPAYMENTS_PUBLIC_ID в .env");
-        } else if (reason && reason !== "User has cancelled") {
-          setError("Ошибка оплаты. Попробуйте ещё раз.");
-        }
-      },
-    });
+    setTimeout(() => { setLoading(false); onSuccess?.(); }, 700);
   };
 
   return (
@@ -611,7 +597,7 @@ function PurchaseModal({ onClose, onSuccess }) {
           }}>{error}</div>
         )}
 
-        {/* Кнопка оплаты через CloudPayments */}
+        {/* Кнопка оплаты (макет) */}
         <button onClick={handlePay} disabled={loading} style={{
           width: "100%", fontFamily: C.font, fontWeight: 700, fontSize: 15,
           padding: "14px", borderRadius: 13, border: "none", cursor: "pointer",
@@ -632,7 +618,7 @@ function PurchaseModal({ onClose, onSuccess }) {
         </button>
 
         <div style={{ marginTop: 12, textAlign: "center", fontSize: 12, color: C.inkFaint }}>
-          Оплата через CloudPayments · Отмена в любой момент
+          Оплата через Робокассу · Отмена в любой момент
         </div>
       </motion.div>
     </ModalBackdrop>

@@ -128,50 +128,18 @@ function FlowersBg() {
 }
 
 /* ════════════════════════════════════════
-   NAVBAR
+   NAVBAR — лаконичное стеклянное меню (только Beauty Helper)
 ════════════════════════════════════════ */
-function Navbar({ onLogin, onRegister, onScrollPricing }) {
+function Navbar({ onLogin, onRegister, onPricing }) {
+  const goHome = () => { window.location.hash = ""; window.scrollTo({ top: 0, behavior: "smooth" }); };
   return (
-    <nav style={{
-      position: "fixed", top: 0, left: 0, right: 0, zIndex: 200,
-      height: 64, display: "flex", alignItems: "center",
-      padding: "0 clamp(1.5rem, 6vw, 4rem)",
-      backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
-      background: "rgba(238,242,239,0.90)",
-      borderBottom: "1px solid rgba(255,255,255,0.45)",
-      boxShadow: "0 2px 16px rgba(15,75,55,0.06)",
-    }}>
-      <div style={{
-        fontFamily: "'Familjen Grotesk', sans-serif",
-        fontWeight: 700, fontSize: 19, color: C.ink, letterSpacing: "-0.028em",
-      }}>
-        Beauty Helper
-      </div>
+    <nav className="lp-nav">
+      <div className="lp-brand" onClick={goHome}>Beauty Helper</div>
       <div style={{ flex: 1 }} />
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <button onClick={onScrollPricing} style={{
-          fontFamily: C.font, fontWeight: 600, fontSize: 14,
-          padding: "9px 16px", borderRadius: 10, border: "none", cursor: "pointer",
-          background: "transparent", color: C.inkSoft,
-        }}>
-          Тарифы
-        </button>
-        <button onClick={onLogin} style={{
-          fontFamily: C.font, fontWeight: 600, fontSize: 14,
-          padding: "9px 18px", borderRadius: 10, cursor: "pointer",
-          background: "transparent", color: C.inkSoft,
-          border: `1px solid ${C.line}`,
-        }}>
-          Войти
-        </button>
-        <button onClick={onRegister} style={{
-          fontFamily: C.font, fontWeight: 700, fontSize: 14,
-          padding: "9px 18px", borderRadius: 10, border: "none", cursor: "pointer",
-          background: C.accentD, color: "#fff",
-          boxShadow: "0 4px 14px rgba(10,74,53,0.28)",
-        }}>
-          Попробовать бесплатно
-        </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <button className="lp-nav-btn lp-pricing-link" onClick={onPricing}>Тарифы</button>
+        <button className="lp-nav-btn lp-login" onClick={onLogin}>Войти</button>
+        <button className="lp-nav-btn lp-try" onClick={onRegister}>Попробовать</button>
       </div>
     </nav>
   );
@@ -266,136 +234,30 @@ function CareSteps({ label, steps, color }) {
   );
 }
 
-/* ── Шкала восстановления волос: метаморфоз ──
-   Из кокона вылупляется гусеничка (тело в одно яблочко). На её пути ещё
-   9 яблок. Она ползёт справа налево, съедает каждое и растёт. В конце пути
-   превращается в бабочку, которая перелетает слева направо, и цикл повторяется.
-   Метафора: неделя за неделей уход преображает волосы. ── */
+/* ── Шкала восстановления волос: зелёные сегменты-батарейка ──
+   Заполняются слева направо, неделя за неделей (10 сегментов = 10 недель).
+   Метафора: уход постепенно преображает волосы. ── */
 const RECOVERY_STEPS = [
   { seg: 1,  text: "1-я неделя: заметно меньше ломкости" },
   { seg: 3,  text: "3-я неделя: волосы мягче на ощупь" },
   { seg: 5,  text: "5-я неделя: меньше жирности у корней" },
   { seg: 7,  text: "7-я неделя: объём и лёгкость" },
   { seg: 9,  text: "9-я неделя: желаемый результат близко" },
-  { seg: 10, text: "10-я неделя: цель достигнута, пора расправить крылья!" },
+  { seg: 10, text: "10-я неделя: цель достигнута!" },
 ];
 
-const META = { x0: 36, x1: 300, cy: 40, apples: 10 };
-// яблоки равномерно по пути: appleX[0] слева … appleX[9] справа (у кокона)
-const appleX = Array.from({ length: META.apples }, (_, i) =>
-  META.x0 + (META.x1 - META.x0) * (i / (META.apples - 1)));
-const SEG_GAP = 9.6;            // расстояние между сегментами тела
-const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-
-function MetamorphosisBar() {
-  const cocoonRef = useRef(null);
-  const catRef = useRef(null);       // группа гусенички
-  const headRef = useRef(null);      // голова (для волны/наклона)
-  const segRefs = useRef([]);        // 10 сегментов тела (0 — за головой)
-  const flyRef = useRef(null);       // бабочка
-  const wingRefs = useRef([]);       // крылья для взмаха
-  const appleRefs = useRef([]);
-  const [week, setWeek] = useState(0);
-  const weekRef = useRef(0);
+function HairRecoveryBar() {
+  const TOTAL = 10;
+  const [filled, setFilled] = useState(1);
 
   useEffect(() => {
-    let raf, start;
-    const CYCLE = 17000;
-    const { x0, x1, cy, apples } = META;
-    const HATCH = 0.12, EAT = 0.82, MORPH = 0.90; // границы фаз внутри цикла
-
-    const frame = (now) => {
-      if (start === undefined) start = now;
-      const c = ((now - start) % CYCLE) / CYCLE;
-      const t = now / 1000;
-
-      // позиция головы по фазам
-      let headX, catOp, cocoonOp, flyOp;
-      if (c < HATCH) {
-        headX = x1;
-        cocoonOp = 1 - sstep(HATCH - 0.05, HATCH, c);
-        catOp = sstep(HATCH - 0.06, HATCH, c);
-        flyOp = 0;
-      } else if (c < EAT) {
-        const pe = (c - HATCH) / (EAT - HATCH);
-        headX = x1 - (x1 - x0) * pe;
-        cocoonOp = 0; catOp = 1; flyOp = 0;
-      } else if (c < MORPH) {
-        headX = x0;
-        const pm = (c - EAT) / (MORPH - EAT);
-        cocoonOp = 0; catOp = 1 - sstep(0, 1, pm); flyOp = sstep(0, 1, pm);
-      } else {
-        headX = x0;
-        cocoonOp = 0; catOp = 0; flyOp = 1;
-      }
-
-      // сколько яблок съедено = сегментов тела (1 на старте … 10 в конце)
-      const eaten = (c < HATCH)
-        ? 0
-        : apples - appleX.filter(ax => ax < headX - 4).length; // съедены те, что правее/под головой
-      const segCount = Math.max(1, eaten);
-
-      // голова и сегменты с «гусеничным» горбиком (бегущая волна вдоль тела)
-      if (catRef.current) catRef.current.style.opacity = catOp.toFixed(2);
-      for (let k = 0; k < 10; k++) {
-        const el = segRefs.current[k];
-        if (!el) continue;
-        const visible = k < segCount;
-        el.style.display = visible ? "" : "none";
-        if (!visible) continue;
-        const sx = headX + k * SEG_GAP;                       // тело тянется вправо, назад
-        const hump = Math.max(0, Math.sin(t * 5 - k * 0.85)) * 3.4; // инчворм-волна
-        const sy = cy - hump;
-        el.setAttribute("transform", `translate(${sx.toFixed(1)}, ${sy.toFixed(1)})`);
-      }
-      if (headRef.current) {
-        const tilt = Math.sin(t * 5) * 6;
-        headRef.current.setAttribute("transform", `rotate(${tilt.toFixed(1)})`);
-      }
-
-      // кокон
-      if (cocoonRef.current) {
-        cocoonRef.current.style.opacity = cocoonOp.toFixed(2);
-        const sway = Math.sin(t * 3) * 2 * cocoonOp;
-        cocoonRef.current.setAttribute("transform", `translate(${x1 + 8}, ${cy}) rotate(${sway.toFixed(1)})`);
-      }
-
-      // бабочка: появляется слева, перелетает слева направо вверх
-      if (flyRef.current) {
-        flyRef.current.style.opacity = flyOp.toFixed(2);
-        let bx = x0, by = cy, fade = 1;
-        if (c >= MORPH) {
-          const pf = (c - MORPH) / (1 - MORPH);
-          bx = x0 + (x1 - x0 + 30) * pf;
-          by = cy - 16 * Math.sin(Math.PI * pf) - 6 * pf;
-          fade = 1 - sstep(0.7, 1, pf);
-        } else if (c >= EAT) {
-          by = cy - 4 * sstep(0, 1, (c - EAT) / (MORPH - EAT));
-        }
-        flyRef.current.style.opacity = (flyOp * fade).toFixed(2);
-        flyRef.current.setAttribute("transform", `translate(${bx.toFixed(1)}, ${by.toFixed(1)})`);
-        const flap = 0.45 + 0.55 * Math.abs(Math.sin(t * 9));
-        wingRefs.current.forEach((w, i) => {
-          if (w) w.setAttribute("transform", `scale(${(i === 0 ? -flap : flap).toFixed(2)}, 1)`);
-        });
-      }
-
-      // яблоки: исчезают, когда голова до них доходит
-      appleRefs.current.forEach((a, i) => {
-        if (!a) return;
-        const eatenApple = c >= HATCH && headX <= appleX[i] + 4;
-        a.style.opacity = eatenApple ? "0" : "1";
-      });
-
-      const w = Math.min(apples, eaten);
-      if (w !== weekRef.current) { weekRef.current = w; setWeek(w); }
-      raf = requestAnimationFrame(frame);
-    };
-    raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
+    const t = setInterval(() => {
+      setFilled(f => (f >= TOTAL ? 0 : f + 1));
+    }, 1000); // 10 сегментов × 1 сек = 10 сек цикл
+    return () => clearInterval(t);
   }, []);
 
-  const msg = [...RECOVERY_STEPS].reverse().find(s => week >= s.seg)?.text ?? "Кокон готов, скоро вылупится гусеничка…";
+  const msg = [...RECOVERY_STEPS].reverse().find(s => filled >= s.seg)?.text ?? "Начинаем программу ухода...";
 
   return (
     <div style={{
@@ -403,87 +265,27 @@ function MetamorphosisBar() {
       borderRadius: 14, padding: "13px 17px",
       backdropFilter: "blur(12px)", boxShadow: C.shadowSm,
     }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 9 }}>
         <span style={{ fontSize: 9.5, fontWeight: 700, color: C.inkFaint, letterSpacing: ".1em", textTransform: "uppercase" }}>
           Восстановление волос
         </span>
-        <span style={{ fontSize: 11, fontWeight: 700, color: week >= META.apples ? C.accentS : C.inkSoft }}>
-          {week * 10}%
+        <span style={{ fontSize: 11, fontWeight: 700, color: filled >= TOTAL ? C.accentS : C.inkSoft }}>
+          {filled * 10}%
         </span>
       </div>
-
-      <svg viewBox="0 0 340 64" style={{ display: "block", width: "100%", height: "auto", marginBottom: 4 }} aria-hidden="true">
-        <defs>
-          <radialGradient id="catSeg" cx="0.35" cy="0.3" r="0.8">
-            <stop offset="0" stopColor="#9cd05f" />
-            <stop offset="1" stopColor="#4f8f2a" />
-          </radialGradient>
-          <linearGradient id="wing" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor={C.accent} />
-            <stop offset="1" stopColor="#9b7db4" />
-          </linearGradient>
-        </defs>
-
-        {/* яблочки на пути */}
-        {Array.from({ length: META.apples }).map((_, i) => (
-          <g key={i} ref={el => { appleRefs.current[i] = el; }}
-            transform={`translate(${appleX[i]}, ${META.cy})`}
-            style={{ transition: "opacity .4s ease" }}>
-            <circle r="4.3" fill="#d2544a" />
-            <ellipse cx="-1.3" cy="-1.3" rx="1.5" ry="1" fill="#fff" opacity="0.4" />
-            <path d="M 0 -4 q 0.6 -2.4 2 -3" stroke="#7a4a2e" strokeWidth="1.1" fill="none" strokeLinecap="round" />
-            <ellipse cx="2.6" cy="-6.2" rx="2" ry="1.1" fill="#4f8f2a" transform="rotate(-24 2.6 -6.2)" />
-          </g>
+      {/* Сегменты-батарейка: заполняются слева направо, неделя за неделей */}
+      <div style={{ display: "flex", gap: 3.5, marginBottom: 9 }}>
+        {Array.from({ length: TOTAL }).map((_, i) => (
+          <div key={i} style={{
+            flex: 1, height: 9, borderRadius: 2.5,
+            background: i < filled
+              ? `linear-gradient(90deg, ${C.accentS}, ${C.accent})`
+              : "rgba(42,155,115,0.11)",
+            transition: "background 0.35s ease",
+            boxShadow: i < filled ? "0 1px 4px rgba(15,107,77,0.18)" : "none",
+          }}/>
         ))}
-
-        {/* кокон справа */}
-        <g ref={cocoonRef} style={{ transition: "opacity .3s ease" }}>
-          <line x1="0" y1="-22" x2="0" y2="-8" stroke="#b9c9a6" strokeWidth="1.2" />
-          <ellipse cx="0" cy="-1" rx="6.5" ry="11" fill="#cfe0b8" />
-          <path d="M -4 -8 Q 0 -4 4 -8 M -5 -2 Q 0 2 5 -2 M -4 4 Q 0 8 4 4"
-            stroke="#a7bd86" strokeWidth="1" fill="none" opacity="0.8" />
-        </g>
-
-        {/* гусеничка: голова + сегменты тела (тянутся вправо/назад) */}
-        <g ref={catRef}>
-          {Array.from({ length: 10 }).map((_, k) => (
-            <g key={k} ref={el => { segRefs.current[k] = el; }} style={{ display: "none" }}>
-              {k === 0 ? (
-                <g ref={headRef}>
-                  <circle r="6.4" fill="url(#catSeg)" />
-                  <line x1="-2" y1="-5.5" x2="-4" y2="-10" stroke="#3f7a1e" strokeWidth="1.1" strokeLinecap="round" />
-                  <line x1="2" y1="-5.5" x2="4" y2="-10" stroke="#3f7a1e" strokeWidth="1.1" strokeLinecap="round" />
-                  <circle cx="-4" cy="-10" r="1.2" fill="#3f7a1e" />
-                  <circle cx="4" cy="-10" r="1.2" fill="#3f7a1e" />
-                  <circle cx="-2.4" cy="-1" r="1.5" fill="#fff" />
-                  <circle cx="-1.9" cy="-1" r="0.8" fill="#1c2a12" />
-                  <circle cx="2.4" cy="-1" r="1.5" fill="#fff" />
-                  <circle cx="2.9" cy="-1" r="0.8" fill="#1c2a12" />
-                  <path d="M -2 2.6 q 2 1.8 4 0" stroke="#2c5715" strokeWidth="0.9" fill="none" strokeLinecap="round" />
-                </g>
-              ) : (
-                <circle r={(5.8 - k * 0.18).toFixed(1)} fill="url(#catSeg)" stroke="#3f7a1e" strokeWidth="0.6" />
-              )}
-            </g>
-          ))}
-        </g>
-
-        {/* бабочка */}
-        <g ref={flyRef} style={{ opacity: 0 }}>
-          <g ref={el => { wingRefs.current[0] = el; }}>
-            <ellipse cx="-5" cy="-3" rx="6" ry="4.5" fill="url(#wing)" opacity="0.92" />
-            <ellipse cx="-4.5" cy="3.5" rx="4.5" ry="3.5" fill="url(#wing)" opacity="0.78" />
-          </g>
-          <g ref={el => { wingRefs.current[1] = el; }}>
-            <ellipse cx="-5" cy="-3" rx="6" ry="4.5" fill="url(#wing)" opacity="0.92" />
-            <ellipse cx="-4.5" cy="3.5" rx="4.5" ry="3.5" fill="url(#wing)" opacity="0.78" />
-          </g>
-          <ellipse cx="0" cy="0" rx="1.3" ry="5.5" fill="#3a2a44" />
-          <line x1="0" y1="-5" x2="-2.5" y2="-9" stroke="#3a2a44" strokeWidth="0.9" strokeLinecap="round" />
-          <line x1="0" y1="-5" x2="2.5" y2="-9" stroke="#3a2a44" strokeWidth="0.9" strokeLinecap="round" />
-        </g>
-      </svg>
-
+      </div>
       <div style={{ fontSize: 10.5, color: C.inkSoft, fontStyle: "italic" }}>{msg}</div>
     </div>
   );
@@ -592,7 +394,7 @@ function Hero({ onRegister, onScrollPricing }) {
   return (
     <section style={{
       minHeight: "100vh", display: "flex", alignItems: "flex-start",
-      padding: "112px clamp(1.5rem, 6vw, 4rem) 80px",
+      padding: "clamp(88px, 15vw, 112px) clamp(1.5rem, 6vw, 4rem) clamp(48px, 8vw, 80px)",
       position: "relative", overflow: "hidden",
     }}>
       {/* фоновые градиентные пятна */}
@@ -604,7 +406,7 @@ function Hero({ onRegister, onScrollPricing }) {
         `,
       }}/>
 
-      <div style={{
+      <div className="lp-hero-grid" style={{
         maxWidth: 1440, margin: "0 auto", width: "100%",
         display: "grid", gridTemplateColumns: "1fr minmax(400px, 560px)",
         gap: "clamp(40px, 5vw, 80px)",
@@ -624,17 +426,17 @@ function Hero({ onRegister, onScrollPricing }) {
 
           <h1 style={{
             fontFamily: C.serif,
-            fontSize: "clamp(3rem, 5.8vw, 5.4rem)",
+            fontSize: "clamp(3rem, 6.2vw, 6.6rem)",
             fontWeight: 700, fontStyle: "italic",
-            color: C.ink, lineHeight: 1.06,
-            letterSpacing: "-0.022em", marginBottom: 28,
+            color: C.ink, lineHeight: 1.05,
+            letterSpacing: "-0.022em", marginBottom: 30,
           }}>
             Почему ваша<br />косметика<br />не работает?
           </h1>
 
           <p style={{
-            fontSize: "clamp(16px, 1.9vw, 20px)", color: C.inkSoft,
-            lineHeight: 1.72, maxWidth: 560, marginBottom: 40,
+            fontSize: "clamp(16px, 2.1vw, 24px)", color: C.inkSoft,
+            lineHeight: 1.68, maxWidth: 620, marginBottom: 44,
           }}>
             Подходит ли Вам Ваш шампунь? Как пользоваться этой дорогущей маской,
             чтобы результат был виден? Сочетаются ли активы в любимых средствах?
@@ -643,8 +445,8 @@ function Hero({ onRegister, onScrollPricing }) {
 
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 56 }}>
             <button onClick={onRegister} style={{
-              fontFamily: C.font, fontWeight: 700, fontSize: "clamp(15px, 1.3vw, 17px)",
-              padding: "16px 34px", borderRadius: 14, border: "none", cursor: "pointer",
+              fontFamily: C.font, fontWeight: 700, fontSize: "clamp(16px, 1.5vw, 19px)",
+              padding: "18px 38px", borderRadius: 14, border: "none", cursor: "pointer",
               background: C.accentD, color: "#fff",
               boxShadow: "0 6px 24px rgba(10,74,53,0.32)",
               letterSpacing: "-0.01em",
@@ -652,8 +454,8 @@ function Hero({ onRegister, onScrollPricing }) {
               Попробовать бесплатно
             </button>
             <button onClick={onScrollPricing} style={{
-              fontFamily: C.font, fontWeight: 600, fontSize: "clamp(15px, 1.3vw, 17px)",
-              padding: "16px 32px", borderRadius: 14, cursor: "pointer",
+              fontFamily: C.font, fontWeight: 600, fontSize: "clamp(16px, 1.5vw, 19px)",
+              padding: "18px 36px", borderRadius: 14, cursor: "pointer",
               background: C.glass, color: C.inkSoft,
               border: `1px solid ${C.glassBd}`,
               backdropFilter: "blur(10px)",
@@ -662,24 +464,26 @@ function Hero({ onRegister, onScrollPricing }) {
             </button>
           </div>
 
-          {/* Статистика */}
-          <div style={{
+          {/* Статистика — цифры читаются хорошо */}
+          <div className="lp-stats" style={{
             display: "flex", gap: 0, flexWrap: "wrap",
             paddingTop: 30, borderTop: `1px solid ${C.line}`,
           }}>
             {[
               { value: "20 000+", label: "ингредиентов в базе" },
               { value: "1 200+",  label: "средств в каталоге" },
-            ].map(({ value, label }, i) => (
-              <div key={label} style={{
-                paddingRight: 36, marginRight: 36,
-                borderRight: i < 1 ? `1px solid ${C.line}` : "none",
+              { value: "20+",     label: "типов средств" },
+              { value: "100%",    label: "составов на русском" },
+            ].map(({ value, label }, i, arr) => (
+              <div key={label} className="lp-stat" style={{
+                paddingRight: 28, marginRight: 28,
+                borderRight: i < arr.length - 1 ? `1px solid ${C.line}` : "none",
               }}>
                 <div style={{
-                  fontSize: "clamp(24px, 2.1vw, 30px)", fontWeight: 800, color: C.accent,
+                  fontSize: "clamp(24px, 2.4vw, 34px)", fontWeight: 800, color: C.accent,
                   letterSpacing: "-0.03em",
                 }}>{value}</div>
-                <div style={{ fontSize: 13, color: C.inkFaint, marginTop: 3 }}>{label}</div>
+                <div style={{ fontSize: 12.5, color: C.inkFaint, marginTop: 3 }}>{label}</div>
               </div>
             ))}
           </div>
@@ -817,7 +621,7 @@ function Hero({ onRegister, onScrollPricing }) {
           </div>
 
           {/* 5. Шкала восстановления волос: метаморфоз гусенички */}
-          <MetamorphosisBar />
+          <HairRecoveryBar />
         </motion.div>
       </div>
     </section>
@@ -831,24 +635,24 @@ function Problems() {
   const pains = [
     {
       n: "01",
-      title: "Средство куплено, результата нет",
-      desc: <>Деньги уходят на банки по чужим советам, а зеркало перемен не замечает. <Brand /> подбирает уход под Ваш тип кожи и волос, поэтому каждая покупка приближает Вас к цели.</>,
+      title: "Купили средство, результата нет",
+      desc: <>Баночки выбираются по чужим советам и красивой упаковке. Кожа и волосы остаются прежними. <Brand /> подбирает уход под Ваш тип и Вашу задачу, чтобы каждая покупка приближала к цели.</>,
     },
     {
       n: "02",
-      title: "Состав как закрытая книга",
-      desc: <>Phenoxyethanol, Caprylic Triglyceride, Niacinamide… Мы расшифровываем каждый ингредиент на понятном русском: что он делает, кому подходит и на что обратить внимание именно Вам.</>,
+      title: "Состав читается как шифр",
+      desc: <>Aqua, Phenoxyethanol, Niacinamide. Сложно понять, где польза и где лишний раздражитель. Мы переводим каждый ингредиент на простой русский: что он делает, кому подходит, на что обратить внимание.</>,
     },
     {
       n: "03",
-      title: "Общие советы Вам не помогают",
-      desc: <>Рекомендации блогеров рассчитаны на всех сразу. Мы анализируем Ваш профиль и Ваши средства, чтобы собрать схему ухода лично для Вас.</>,
+      title: "Советы из интернета Вам не подходят",
+      desc: <>То, что помогло блогеру, Вам может навредить: другая кожа, другие задачи, несочетаемые активы. <Brand /> опирается на Ваш профиль и Ваши средства и собирает уход лично под Вас.</>,
     },
   ];
 
   return (
     <section style={{
-      padding: "80px clamp(1.5rem, 6vw, 4rem)",
+      padding: "clamp(52px, 8vw, 80px) clamp(1.5rem, 6vw, 4rem)",
       background: "rgba(255,255,255,0.28)",
       borderTop: `1px solid ${C.line}`, borderBottom: `1px solid ${C.line}`,
     }}>
@@ -858,11 +662,11 @@ function Problems() {
           fontFamily: C.serif, fontSize: "clamp(1.8rem, 3.5vw, 2.6rem)",
           fontWeight: 600, color: C.ink, marginBottom: 14, letterSpacing: "-0.02em",
         }}>
-          Почему так происходит
+          Три причины, почему уход не работает
         </h2>
         <p style={{ fontSize: 16, color: C.inkSoft, lineHeight: 1.65, marginBottom: 48, maxWidth: 640 }}>
-          <Brand /> создан, чтобы закрыть эти боли. Один сервис
-          для всех Ваших бьюти-вопросов.
+          Чаще всего выбор косметики идёт вслепую. Вот что обычно мешает увидеть
+          результат и как с этим помогает <Brand />.
         </p>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }}>
@@ -910,7 +714,7 @@ function Solution() {
   const treat = ["Термозащита под Вашу рутину укладки", "Масло как финишный продукт"];
 
   return (
-    <section style={{ padding: "96px clamp(1.5rem, 6vw, 4rem)" }}>
+    <section style={{ padding: "clamp(56px, 9vw, 96px) clamp(1.5rem, 6vw, 4rem)" }}>
       <div style={{
         maxWidth: 1100, margin: "0 auto",
         display: "grid", gridTemplateColumns: "1fr 1fr",
@@ -1048,7 +852,7 @@ function HowItWorks() {
 
   return (
     <section style={{
-      padding: "80px clamp(1.5rem, 6vw, 4rem)",
+      padding: "clamp(52px, 8vw, 80px) clamp(1.5rem, 6vw, 4rem)",
       background: "rgba(255,255,255,0.22)",
       borderTop: `1px solid ${C.line}`, borderBottom: `1px solid ${C.line}`,
     }}>
@@ -1136,7 +940,7 @@ function Testimonials() {
   ];
 
   return (
-    <section style={{ padding: "96px clamp(1.5rem, 6vw, 4rem)" }}>
+    <section style={{ padding: "clamp(56px, 9vw, 96px) clamp(1.5rem, 6vw, 4rem)" }}>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
         <SectionLabel>Отзывы</SectionLabel>
         <h2 style={{
@@ -1205,7 +1009,7 @@ function PricingSection({ onRegister, onPurchase }) {
 
   return (
     <section style={{
-      padding: "80px clamp(1.5rem, 6vw, 4rem)",
+      padding: "clamp(52px, 8vw, 80px) clamp(1.5rem, 6vw, 4rem)",
       background: "rgba(255,255,255,0.22)",
       borderTop: `1px solid ${C.line}`, borderBottom: `1px solid ${C.line}`,
     }}>
@@ -1319,7 +1123,7 @@ function CTASection({ onRegister }) {
   const [email, setEmail] = useState("");
 
   return (
-    <section style={{ padding: "96px clamp(1.5rem, 6vw, 4rem)" }}>
+    <section style={{ padding: "clamp(56px, 9vw, 96px) clamp(1.5rem, 6vw, 4rem)" }}>
       <div style={{ maxWidth: 560, margin: "0 auto", textAlign: "center" }}>
         <SectionLabel>Начните сейчас</SectionLabel>
         <h2 style={{
@@ -1371,18 +1175,21 @@ function CTASection({ onRegister }) {
 /* ════════════════════════════════════════
    FOOTER
 ════════════════════════════════════════ */
-function Footer({ onLogin }) {
+function Footer({ onLogin, onPricing }) {
   const docLink = { fontSize: 12, color: C.inkFaint, textDecoration: "underline", textUnderlineOffset: 2 };
+  const navLink = { fontSize: 13, color: C.inkSoft, cursor: "pointer", background: "none", border: "none", padding: 0, textAlign: "left", fontFamily: C.font };
+  const head = { fontSize: 11, fontWeight: 800, letterSpacing: ".1em", textTransform: "uppercase", color: C.inkFaint, marginBottom: 12 };
   return (
     <footer style={{
-      padding: "32px clamp(1.5rem, 6vw, 4rem) 28px",
+      padding: "44px clamp(1.5rem, 6vw, 4rem) 30px",
       borderTop: `1px solid ${C.line}`,
     }}>
       <div style={{
+        maxWidth: 1100, margin: "0 auto",
         display: "flex", alignItems: "flex-start",
-        justifyContent: "space-between", flexWrap: "wrap", gap: 24,
+        justifyContent: "space-between", flexWrap: "wrap", gap: 32,
       }}>
-        <div>
+        <div style={{ maxWidth: 240 }}>
           <div style={{
             fontFamily: "'Familjen Grotesk', sans-serif",
             fontWeight: 700, fontSize: 17, color: C.ink, letterSpacing: "-0.028em",
@@ -1390,32 +1197,42 @@ function Footer({ onLogin }) {
           }}>
             Beauty Helper
           </div>
-          <div style={{ fontSize: 12, color: C.inkFaint }}>by Simona · 2026</div>
+          <div style={{ fontSize: 12.5, color: C.inkFaint, lineHeight: 1.6 }}>Помогаем разобраться в составах и собрать уход, который работает.</div>
+          <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 8 }}>by Simona · 2026</div>
+        </div>
+
+        {/* навигация */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+          <div style={head}>Разделы</div>
+          <button onClick={onPricing} style={navLink}>Тарифы</button>
+          <button onClick={onLogin} style={navLink}>Войти</button>
         </div>
 
         {/* юридические документы */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={head}>Документы</div>
           <a href={LEGAL.offer} target="_blank" rel="noopener noreferrer" style={docLink}>Оферта</a>
-          <a href={LEGAL.policy} target="_blank" rel="noopener noreferrer" style={docLink}>Политика обработки персональных данных</a>
-          <a href={LEGAL.pdConsent} target="_blank" rel="noopener noreferrer" style={docLink}>Согласие на обработку персональных данных</a>
-          <a href={LEGAL.adsConsent} target="_blank" rel="noopener noreferrer" style={docLink}>Согласие на получение рассылки</a>
+          <a href={LEGAL.policy} target="_blank" rel="noopener noreferrer" style={docLink}>Политика обработки ПД</a>
+          <a href={LEGAL.pdConsent} target="_blank" rel="noopener noreferrer" style={docLink}>Согласие на обработку ПД</a>
+          <a href={LEGAL.adsConsent} target="_blank" rel="noopener noreferrer" style={docLink}>Согласие на рассылку</a>
         </div>
 
         {/* реквизиты */}
         <div style={{ fontSize: 12, color: C.inkFaint, lineHeight: 1.8 }}>
+          <div style={head}>Реквизиты</div>
           <div>{LEGAL.ownerName}</div>
           <div>ИНН {LEGAL.ownerInn}</div>
           <a href={`mailto:${LEGAL.ownerEmail}`} style={{ color: C.inkFaint }}>{LEGAL.ownerEmail}</a>
+          <div style={{ marginTop: 12 }}>
+            <button onClick={onLogin} style={{
+              fontFamily: C.font, fontWeight: 700, fontSize: 13,
+              padding: "8px 18px", borderRadius: 9, cursor: "pointer",
+              background: C.accentBg, color: C.accent, border: `1.5px solid ${C.accent}`,
+            }}>
+              Войти
+            </button>
+          </div>
         </div>
-
-        <button onClick={onLogin} style={{
-          fontFamily: C.font, fontWeight: 600, fontSize: 13,
-          padding: "7px 16px", borderRadius: 9, cursor: "pointer",
-          background: "transparent", color: C.inkFaint,
-          border: `1px solid ${C.line}`,
-        }}>
-          Войти
-        </button>
       </div>
     </footer>
   );
@@ -1442,6 +1259,8 @@ export default function Landing({ onLogin, onRegister, onPurchase }) {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Familjen+Grotesk:wght@700&family=Playfair+Display:ital,wght@0,600;0,700;1,400;1,600;1,700&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        /* фон-цветы декоративны; гасим горизонтальный скролл на мобайле */
+        html, body { overflow-x: hidden; max-width: 100%; }
         button { font-family: 'Manrope', sans-serif; }
         input  { font-family: 'Manrope', sans-serif; }
         ::placeholder { color: #74897f; }
@@ -1457,11 +1276,50 @@ export default function Landing({ onLogin, onRegister, onPurchase }) {
           0%, 100% { opacity: 0.45; transform: scale(0.85); }
           50%       { opacity: 1;    transform: scale(1.2);  }
         }
+        /* ── Лаконичное стеклянное меню ── */
+        .lp-nav {
+          position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+          height: 60px; display: flex; align-items: center;
+          padding: 0 clamp(1rem, 5vw, 4rem);
+          background: rgba(255,255,255,0.5);
+          backdrop-filter: blur(22px) saturate(160%); -webkit-backdrop-filter: blur(22px) saturate(160%);
+          border-bottom: 1px solid rgba(255,255,255,0.6);
+          box-shadow: 0 4px 24px rgba(15,75,55,0.06);
+        }
+        .lp-brand {
+          font-family: 'Familjen Grotesk', sans-serif; font-weight: 700;
+          font-size: clamp(17px, 2.2vw, 20px); color: ${C.ink};
+          letter-spacing: -0.028em; cursor: pointer;
+        }
+        .lp-nav-btn { font-family: ${C.font}; font-weight: 700; font-size: 14px; border-radius: 10px; cursor: pointer; white-space: nowrap; border: none; }
+        .lp-pricing-link { padding: 9px 14px; background: transparent; color: ${C.inkSoft}; }
+        .lp-pricing-link:hover { color: ${C.accent}; }
+        .lp-login { padding: 9px 18px; background: ${C.accentBg}; color: ${C.accent}; border: 1.5px solid ${C.accent}; }
+        .lp-try { padding: 9px 18px; background: ${C.accentD}; color: #fff; box-shadow: 0 4px 14px rgba(10,74,53,0.28); }
+        @media (max-width: 600px) {
+          .lp-nav { height: 56px; }
+          .lp-pricing-link { display: none; }
+          .lp-nav-btn { font-size: 13px; }
+          .lp-login, .lp-try { padding: 8px 14px; }
+        }
+        @media (max-width: 360px) {
+          .lp-login, .lp-try { padding: 7px 11px; font-size: 12.5px; }
+        }
+        /* Hero: две колонки на десктопе, стопка на мобайле (иначе горизонтальный скролл) */
+        @media (max-width: 860px) {
+          .lp-hero-grid { grid-template-columns: 1fr !important; }
+          .lp-hero-grid > * { min-width: 0; }
+        }
+        /* Метрики: 4 в ряд на десктопе, 2×2 на мобайле */
+        @media (max-width: 520px) {
+          .lp-stats { gap: 20px 0 !important; }
+          .lp-stat { flex: 0 0 50% !important; padding-right: 0 !important; margin-right: 0 !important; border-right: none !important; }
+        }
       `}</style>
 
       <FlowersBg />
       <div style={{ position: "relative", zIndex: 1 }}>
-        <Navbar onLogin={onLogin} onRegister={onRegister} onScrollPricing={scrollToPricing} />
+        <Navbar onLogin={onLogin} onRegister={onRegister} onPricing={scrollToPricing} />
         <Hero onRegister={onRegister} onScrollPricing={scrollToPricing} />
         <Problems />
         <Solution />
@@ -1471,7 +1329,7 @@ export default function Landing({ onLogin, onRegister, onPurchase }) {
           <PricingSection onRegister={onRegister} onPurchase={onPurchase} />
         </div>
         <CTASection onRegister={onRegister} />
-        <Footer onLogin={onLogin} />
+        <Footer onLogin={onLogin} onPricing={scrollToPricing} />
       </div>
     </div>
   );

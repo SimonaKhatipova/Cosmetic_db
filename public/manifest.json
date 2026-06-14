@@ -1,0 +1,17 @@
+{
+  "name": "Beauty Helper",
+  "short_name": "Beauty Helper",
+  "description": "Расшифровка состава косметики на русском и подбор ухода за волосами и лицом.",
+  "start_url": "/Cosmetic_db/",
+  "scope": "/Cosmetic_db/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#eef2ef",
+  "theme_color": "#0f6b4d",
+  "lang": "ru",
+  "icons": [
+    { "src": "/Cosmetic_db/app-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/Cosmetic_db/app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/Cosmetic_db/app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

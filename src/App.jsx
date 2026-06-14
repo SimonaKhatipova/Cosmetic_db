@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import mascot from "./assets/mascot.png";
 import Landing from "./Landing.jsx";
-import { openPaymentWidget } from "./lib/cloudpayments.js";
+import { startSubscription } from "./lib/robokassa.js";
 import { LEGAL } from "./legal.js";
 
 const SUPABASE_URL = "https://lcvszvxbszszqikboxeq.supabase.co";
@@ -28,6 +28,15 @@ const isPro = () => isAdmin() ||
   (CURRENT_PROFILE?.tariff === "pro" &&
     (!CURRENT_PROFILE.pro_until || new Date(CURRENT_PROFILE.pro_until) > new Date()));
 const compareLimit = () => (isPro() ? PRO_LIMITS.compare : FREE_LIMITS.compare);
+
+// Маски ввода. Почта — только латиница и допустимые символы email; кириллицу и
+// пробелы не пускаем. Телефон — только цифры и один «+» в начале.
+const sanitizeEmail = (v) => v.replace(/[^a-zA-Z0-9@._%+\-]/g, "");
+const sanitizePhone = (v) => {
+  const hasPlus = v.trim().startsWith("+");
+  const digits = v.replace(/\D/g, "");
+  return (hasPlus ? "+" : "") + digits;
+};
 
 function authHeaders() {
   return {
@@ -207,6 +216,35 @@ async function updateUserProfile(data) {
   CURRENT_USER = CURRENT_USER
     ? { ...CURRENT_USER, user_metadata: { ...CURRENT_USER.user_metadata, ...data } }
     : { user_metadata: { ...data } };
+}
+
+// Установить/сменить пароль текущего пользователя. После OTP уже есть сессия,
+// поэтому вход по почте+паролю заработает на следующий раз.
+async function setAccountPassword(password) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    method: "PUT",
+    headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${ACCESS_TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ password })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error_description || data?.msg || "Не удалось сохранить пароль");
+  return data;
+}
+
+// Оценка надёжности пароля: 0..4 + подсказки, что улучшить.
+function passwordStrength(pw) {
+  const checks = {
+    len: pw.length >= 8,
+    case: /[a-zа-яё]/.test(pw) && /[A-ZА-ЯЁ]/.test(pw),
+    digit: /\d/.test(pw),
+    special: /[^A-Za-zА-Яа-яЁё0-9]/.test(pw),
+  };
+  let score = (checks.len ? 1 : 0) + (checks.case ? 1 : 0) + (checks.digit ? 1 : 0) + (checks.special ? 1 : 0);
+  if (pw.length >= 12 && score >= 3) score = 4;
+  score = Math.min(4, score);
+  const label = pw.length === 0 ? "" : score <= 1 ? "Слабый" : score === 2 ? "Средний" : score === 3 ? "Хороший" : "Надёжный";
+  const color = score <= 1 ? "#c0584f" : score === 2 ? "#c98a3a" : score === 3 ? "#3f9a63" : "#1f7a5c";
+  return { score, label, color, checks };
 }
 
 // Тариф из public.profiles. Безопасно деградирует (нет строки/таблицы → free),
@@ -757,19 +795,24 @@ const styles = `
   .filter-sidebar-body .filter-field { min-width: 0; }
   .filter-sidebar-body .filter-checks { flex-direction: column; align-items: flex-start; gap: 11px; }
 
-  /* Развёрнутое дерево вида средства (сайдбар) */
-  .hier-tree { display: flex; flex-direction: column; gap: 1px; margin-top: 4px; }
+  /* Развёрнутое дерево вида средства (сайдбар) — три чётких уровня: группа › подгруппа › тип */
+  .hier-tree { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
   .hier-tree-root, .hier-tree-item, .hier-tree-sub-head { cursor: pointer; border-radius: 8px; transition: background .12s, color .12s; }
-  .hier-tree-root { padding: 7px 10px; font-size: 13px; font-weight: 600; color: var(--ink); }
-  .hier-tree-root:hover, .hier-tree-item:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-  .hier-tree-root.active, .hier-tree-item.active { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent-deep); font-weight: 600; }
-  .hier-tree-group { margin-top: 6px; }
-  .hier-tree-group-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--ink-soft); padding: 6px 6px 4px; }
-  .hier-tree-sub { margin: 1px 0 2px 7px; padding-left: 7px; border-left: 2px solid color-mix(in srgb, var(--accent) 24%, transparent); }
-  .hier-tree-sub-head { padding: 6px 8px 3px; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); }
-  .hier-tree-sub-head:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-deep); }
-  .hier-tree-sub-head.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
-  .hier-tree-item { padding: 6px 9px; font-size: 13px; color: var(--ink); }
+  .hier-tree-root { padding: 8px 10px; font-size: 13px; font-weight: 700; color: var(--ink); }
+  .hier-tree-root:hover, .hier-tree-item:hover, .hier-tree-sub-head:hover { background: color-mix(in srgb, var(--accent) 11%, transparent); }
+  .hier-tree-root.active, .hier-tree-item.active { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent-deep); font-weight: 600; }
+  /* Группа — заметный заголовок-секция с разделителем сверху */
+  .hier-tree-group { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--glass-border); }
+  .hier-tree-group:first-of-type { margin-top: 4px; padding-top: 0; border-top: none; }
+  .hier-tree-group-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 800; color: var(--ink); padding: 4px 6px 8px; letter-spacing: -0.01em; }
+  .hier-tree-group-head .hier-ic { font-size: 14px; opacity: .9; }
+  /* Подгруппа — вторичный уровень с акцентной линией слева */
+  .hier-tree-sub { margin: 2px 0 5px 4px; padding-left: 10px; border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+  .hier-tree-sub-head { padding: 6px 9px; font-size: 12px; font-weight: 700; color: var(--ink-soft); }
+  .hier-tree-sub-head.active { color: var(--accent-deep); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  /* Тип — третий уровень: мельче, с отступом, легче по весу */
+  .hier-tree-item { padding: 5px 9px 5px 14px; font-size: 12.5px; font-weight: 500; color: var(--ink-soft); }
+  .hier-tree-item.active { color: var(--accent-deep); font-weight: 600; }
 
   /* Десктоп: кнопка «Фильтры» и мобильная панель скрыты — фильтры в сайдбаре */
   @media (min-width: 861px) {
@@ -845,6 +888,169 @@ const styles = `
   }
   .lk-logout:hover { background: rgba(192,82,74,0.08); }
 
+  /* ── Личный кабинет: отдельная страница ── */
+  .lk-page { position: fixed; inset: 0; z-index: 500; overflow-y: auto;
+    background:
+      radial-gradient(120% 70% at 50% -8%, #e7f1ec 0%, rgba(231,241,236,0) 55%),
+      linear-gradient(168deg, #eef5f3, #e6f1ee 55%, #e1efeb); }
+  .lk-topbar { position: sticky; top: 0; z-index: 6; display: flex; align-items: center; gap: 12px;
+    padding: 13px clamp(16px, 5vw, 40px); background: rgba(238,242,239,0.86);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border-bottom: 1px solid rgba(255,255,255,0.5); }
+  .lk-topbar-title { font-weight: 700; font-size: 16px; color: var(--ink); letter-spacing: -0.02em; }
+  .lk-back { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 14px;
+    color: var(--accent); background: rgba(15,107,77,0.07); border: 1.5px solid var(--accent);
+    border-radius: 10px; padding: 7px 15px; cursor: pointer; font-family: inherit; }
+  .lk-back:hover { background: rgba(15,107,77,0.13); }
+  .lk-top-logout { margin-left: auto; font-weight: 600; font-size: 13.5px; color: var(--rose);
+    background: none; border: 1px solid var(--glass-border); border-radius: 10px; padding: 7px 15px; cursor: pointer; font-family: inherit; }
+  .lk-top-logout:hover { background: rgba(192,82,74,0.08); }
+  .lk-wrap { max-width: 960px; margin: 0 auto; padding: clamp(20px, 4vw, 36px) clamp(16px, 5vw, 40px) 80px; }
+
+  .lk-hero { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .lk-hero-ava { width: 64px; height: 64px; border-radius: 20px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 26px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-deep)); box-shadow: 0 6px 18px rgba(15,107,77,0.28); }
+  .lk-hero-name { font-family: 'Familjen Grotesk', sans-serif; font-size: 23px; font-weight: 800; color: var(--ink); letter-spacing: -0.02em; line-height: 1.15; }
+  .lk-hero-email { font-size: 13px; color: var(--ink-faint); margin-top: 2px; }
+  .lk-pill { margin-left: auto; align-self: center; font-size: 12px; font-weight: 800; letter-spacing: .04em;
+    padding: 7px 15px; border-radius: 100px; white-space: nowrap;
+    background: rgba(60,110,88,0.12); color: var(--accent-deep); }
+  .lk-pill.pro { background: linear-gradient(120deg, rgba(202,162,74,0.22), rgba(231,200,120,0.16)); color: #8a6a1f; border: 1px solid rgba(202,162,74,0.4); }
+
+  .lk-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .lk-block { background: rgba(255,255,255,0.5); border: 1px solid var(--glass-border);
+    border-radius: 18px; padding: 20px 20px; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+  .lk-block-wide { grid-column: 1 / -1; }
+  .lk-block-title { font-family: 'Familjen Grotesk', sans-serif; font-size: 15px; font-weight: 700; color: var(--ink);
+    letter-spacing: -0.01em; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+  @media (max-width: 680px) { .lk-grid { grid-template-columns: 1fr; } }
+
+  .lk-field { margin-bottom: 12px; }
+  .lk-field label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+    font-weight: 700; color: var(--ink-faint); margin-bottom: 5px; }
+  .lk-input { width: 100%; padding: 10px 13px; border-radius: 11px; border: 1px solid var(--glass-border);
+    background: rgba(255,255,255,0.7); font-family: inherit; font-size: 14px; color: var(--ink); }
+  .lk-input:focus { outline: none; border-color: var(--accent); }
+  .lk-input[disabled] { color: var(--ink-faint); background: rgba(0,0,0,0.03); }
+  .lk-save { margin-top: 4px; padding: 10px 20px; border-radius: 11px; border: none; cursor: pointer;
+    background: var(--accent); color: #fff; font-family: inherit; font-weight: 700; font-size: 14px; }
+  .lk-save:disabled { opacity: .5; cursor: default; }
+  .lk-saved { font-size: 12.5px; color: var(--accent); font-weight: 700; margin-left: 10px; }
+
+  .lk-viewed { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; }
+  .lk-viewed-item { display: flex; align-items: center; gap: 9px; padding: 8px; border-radius: 12px; cursor: pointer;
+    background: rgba(255,255,255,0.55); border: 1px solid var(--glass-border); transition: transform .12s; }
+  .lk-viewed-item:hover { transform: translateY(-2px); }
+  .lk-viewed-thumb { width: 38px; height: 46px; border-radius: 8px; flex-shrink: 0; object-fit: contain;
+    background: linear-gradient(150deg, rgba(246,251,255,0.7), rgba(232,243,253,0.5)); }
+  .lk-viewed-name { font-size: 12px; font-weight: 600; color: var(--ink); line-height: 1.25;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .lk-viewed-brand { font-size: 10px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .04em; margin-top: 1px; }
+  .lk-empty { font-size: 13px; color: var(--ink-faint); line-height: 1.6; }
+
+  .lk-soon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+  .lk-soon-card { position: relative; padding: 15px 15px 14px; border-radius: 14px;
+    background: rgba(255,255,255,0.45); border: 1px solid var(--glass-border); }
+  .lk-soon-ic { font-size: 22px; line-height: 1; margin-bottom: 9px; }
+  .lk-soon-name { font-size: 13.5px; font-weight: 700; color: var(--ink); margin-bottom: 3px; }
+  .lk-soon-desc { font-size: 12px; color: var(--ink-soft); line-height: 1.5; }
+  .lk-badge { position: absolute; top: 11px; right: 11px; font-size: 9px; font-weight: 800; letter-spacing: .05em;
+    padding: 3px 8px; border-radius: 100px; background: rgba(60,110,88,0.13); color: var(--accent-deep); }
+  .lk-badge.pro { background: var(--accent-deep); color: #fff; }
+  .lk-docs-page { display: flex; flex-wrap: wrap; gap: 10px; }
+  .lk-docs-page a { font-size: 13px; color: var(--accent); text-decoration: none; font-weight: 600;
+    padding: 7px 13px; border-radius: 10px; background: rgba(15,107,77,0.06); border: 1px solid var(--glass-border); }
+  .lk-docs-page a:hover { background: rgba(15,107,77,0.12); }
+
+  /* ── Кабинет v2: ценностные блоки ── */
+  .lk-stack { display: flex; flex-direction: column; gap: 20px; }
+  .lk-pill-cta { margin-left: auto; align-self: center; font-weight: 700; font-size: 13px; color: #fff;
+    background: var(--accent-deep); border: none; border-radius: 100px; padding: 10px 20px; cursor: pointer; font-family: inherit; }
+  .lk-pill-cta:hover { background: var(--accent); }
+  .lk-hero-card { padding: 28px clamp(20px, 4vw, 34px); border-radius: 22px;
+    background: linear-gradient(135deg, rgba(42,155,115,0.13), rgba(15,107,77,0.06));
+    border: 1px solid rgba(42,155,115,0.22); }
+  .lk-hero-card-tag { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
+  .lk-hero-card-title { font-family: 'Familjen Grotesk', sans-serif; font-size: clamp(20px, 3vw, 27px); font-weight: 800; color: var(--ink); letter-spacing: -0.02em; margin: 0 0 8px; }
+  .lk-hero-card-text { font-size: 14.5px; color: var(--ink-soft); line-height: 1.6; max-width: 620px; margin: 0 0 16px; }
+  .lk-slots { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+  .lk-slot { width: 56px; height: 56px; border-radius: 14px; border: 2px dashed rgba(15,107,77,0.3);
+    display: flex; align-items: center; justify-content: center; font-size: 22px; color: rgba(15,107,77,0.5); background: rgba(255,255,255,0.4); }
+  .lk-primary { padding: 13px 26px; border-radius: 13px; border: none; cursor: pointer;
+    background: var(--accent-deep); color: #fff; font-family: inherit; font-weight: 700; font-size: 14.5px; box-shadow: 0 6px 18px rgba(10,74,53,0.25); }
+  .lk-primary:hover { background: var(--accent); }
+  .lk-block-airy { padding: 24px clamp(18px, 3vw, 26px); }
+  .lk-sub { font-size: 13px; color: var(--ink-faint); line-height: 1.55; margin: -6px 0 16px; max-width: 580px; }
+  .lk-bars { display: flex; flex-direction: column; gap: 11px; }
+  .lk-bar-row { display: grid; grid-template-columns: 132px 1fr 64px; align-items: center; gap: 12px; }
+  .lk-bar-label { font-size: 13px; color: var(--ink-soft); font-weight: 600; }
+  .lk-bar-track { height: 10px; border-radius: 100px; background: rgba(0,0,0,0.06); overflow: hidden; }
+  .lk-bar-fill { height: 100%; border-radius: 100px; transition: width .4s ease; }
+  .lk-bar-val { font-size: 12px; font-weight: 700; color: var(--ink-faint); text-align: right; }
+  .lk-two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .lk-banner { display: flex; gap: 14px; padding: 20px; border-radius: 18px; border: 1px solid var(--glass-border); }
+  .lk-banner.hair { background: linear-gradient(135deg, rgba(42,155,115,0.12), rgba(255,255,255,0.42)); }
+  .lk-banner.face { background: linear-gradient(135deg, rgba(155,125,180,0.13), rgba(255,255,255,0.42)); }
+  .lk-banner-ic { font-size: 30px; line-height: 1; flex-shrink: 0; }
+  .lk-banner-name { font-size: 15px; font-weight: 700; color: var(--ink); margin-bottom: 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .lk-banner-text { font-size: 13px; color: var(--ink-soft); line-height: 1.55; margin-bottom: 13px; }
+  .lk-ghost { padding: 9px 18px; border-radius: 11px; cursor: pointer; font-family: inherit; font-weight: 700; font-size: 13px;
+    background: rgba(255,255,255,0.6); border: 1.5px solid var(--accent); color: var(--accent); }
+  .lk-ghost:hover { background: var(--accent); color: #fff; }
+  .lk-weeks { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; }
+  .lk-week { flex-shrink: 0; width: 96px; text-align: center; }
+  .lk-week-photo { width: 96px; height: 120px; border-radius: 14px; border: 2px dashed rgba(15,107,77,0.25);
+    display: flex; align-items: center; justify-content: center; font-size: 26px; color: rgba(15,107,77,0.4);
+    background: rgba(255,255,255,0.4); margin-bottom: 6px; }
+  .lk-week-n { font-size: 12px; color: var(--ink-faint); font-weight: 600; }
+  .lk-articles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .lk-article { position: relative; padding: 16px; border-radius: 14px; background: rgba(255,255,255,0.45); border: 1px solid var(--glass-border); }
+  .lk-article-t { font-size: 14px; font-weight: 700; color: var(--ink); margin-bottom: 5px; max-width: 84%; }
+  .lk-article-d { font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; }
+  .lk-meters-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 14px; }
+  @media (max-width: 680px) {
+    .lk-two { grid-template-columns: 1fr; }
+    .lk-meters-row { grid-template-columns: 1fr; }
+    .lk-bar-row { grid-template-columns: 96px 1fr 52px; }
+  }
+
+  /* ── Настройки (переиспользует .lk-page / .lk-block) ── */
+  .lk-top-ico { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px;
+    border-radius: 10px; border: 1px solid var(--glass-border); background: rgba(255,255,255,0.55);
+    color: var(--ink-soft); font-size: 16px; cursor: pointer; }
+  .lk-top-ico:hover { background: rgba(255,255,255,0.85); color: var(--ink); }
+  .set-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 560px) { .set-grid { grid-template-columns: 1fr; } }
+  .set-readonly { font-size: 14px; color: var(--ink); padding: 10px 13px; border-radius: 11px;
+    background: rgba(0,0,0,0.035); border: 1px solid var(--glass-border); word-break: break-all; }
+  .set-row { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-bottom: 1px solid var(--glass-border); }
+  .set-row:last-child { border-bottom: none; }
+  .set-row-txt { flex: 1; min-width: 0; }
+  .set-row-name { font-size: 14px; font-weight: 600; color: var(--ink); }
+  .set-row-desc { font-size: 12.5px; color: var(--ink-faint); margin-top: 2px; line-height: 1.45; }
+  /* переключатель */
+  .set-switch { position: relative; width: 44px; height: 26px; flex-shrink: 0; cursor: pointer; }
+  .set-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .set-switch .track { position: absolute; inset: 0; border-radius: 100px; background: rgba(0,0,0,0.16); transition: background .2s; }
+  .set-switch .knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.25); transition: transform .2s; }
+  .set-switch input:checked + .track { background: var(--accent); }
+  .set-switch input:checked + .track + .knob { transform: translateX(18px); }
+  .set-switch input:disabled + .track { opacity: 0.5; cursor: not-allowed; }
+  .set-links { display: flex; flex-direction: column; gap: 2px; }
+  .set-link { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 2px;
+    font-size: 14px; color: var(--ink-soft); text-decoration: none; border-bottom: 1px solid var(--glass-border); cursor: pointer; }
+  .set-link:last-child { border-bottom: none; }
+  .set-link:hover { color: var(--accent); }
+  .set-link .arr { color: var(--ink-faint); font-size: 16px; }
+  .set-danger { width: 100%; padding: 12px; border-radius: 12px; cursor: pointer; font-family: inherit;
+    font-weight: 700; font-size: 13.5px; background: rgba(193,123,138,0.1); color: var(--rose); border: 1px solid rgba(193,123,138,0.3); }
+  .set-danger:hover { background: rgba(193,123,138,0.18); }
+  .set-saved { font-size: 12.5px; color: var(--accent); font-weight: 700; }
+  .set-about-row { display: flex; justify-content: space-between; font-size: 13.5px; padding: 7px 0; color: var(--ink-soft); }
+  .set-about-row b { color: var(--ink); font-weight: 600; }
+
   .paywall-card {
     width: min(400px, 92vw); text-align: center;
     background: var(--glass-strong); border: 1px solid var(--glass-border);
@@ -884,17 +1090,27 @@ const styles = `
   /* ── Витрина: вертикальные карточки-банки ── */
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 18px; position: relative; z-index: 1; }
   .card {
-    background: linear-gradient(160deg, rgba(225,238,252,0.55), rgba(208,226,244,0.42));
-    border: 1px solid rgba(170,208,238,0.38);
+    background: linear-gradient(160deg, rgba(243,249,255,0.66), rgba(231,242,252,0.52));
+    border: 1px solid rgba(193,221,244,0.42);
     backdrop-filter: blur(18px) saturate(120%); -webkit-backdrop-filter: blur(18px) saturate(120%);
     border-radius: 20px; overflow: hidden; cursor: pointer;
     box-shadow: 0 2px 12px rgba(30,80,140,0.07); transition: transform .18s, box-shadow .25s;
     display: flex; flex-direction: column;
   }
   .card:hover { transform: scale(1.033); box-shadow: 0 8px 28px rgba(30,80,140,0.13); }
+  /* ── скелетоны загрузки ── */
+  @keyframes sk-shimmer { 0% { background-position: -300px 0; } 100% { background-position: 300px 0; } }
+  .sk { background: linear-gradient(90deg, rgba(190,210,230,0.16) 25%, rgba(190,210,230,0.34) 50%, rgba(190,210,230,0.16) 75%);
+    background-size: 600px 100%; animation: sk-shimmer 1.25s ease-in-out infinite; border-radius: 8px; }
+  .sk-card { background: rgba(243,249,255,0.5); border: 1px solid rgba(193,221,244,0.32);
+    border-radius: 20px; overflow: hidden; display: flex; flex-direction: column; }
+  .sk-card .sk-media { aspect-ratio: 3 / 4; border-radius: 0; }
+  .sk-card .sk-body { padding: 14px 15px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .sk-line { height: 11px; }
+  .sk-row { display: flex; gap: 14px; align-items: center; padding: 13px 4px; border-bottom: 1px solid var(--glass-border); }
   .card-media {
     aspect-ratio: 3 / 4;  /* вертикально-ориентированная банка/флакон */
-    background: linear-gradient(150deg, rgba(235,245,255,0.65), rgba(210,228,245,0.45));
+    background: linear-gradient(150deg, rgba(248,252,255,0.72), rgba(234,244,253,0.52));
     display: flex; align-items: center; justify-content: center;
     position: relative;
   }
@@ -1604,6 +1820,16 @@ const styles = `
     transition: background .3s;
   }
   .reg-progress-seg.on { background: var(--accent); }
+  /* ── индикатор надёжности пароля ── */
+  .pw-meter { margin: -4px 0 14px; text-align: left; }
+  .pw-bar { display: flex; gap: 4px; margin-bottom: 6px; }
+  .pw-seg { flex: 1; height: 5px; border-radius: 3px; transition: background .25s; }
+  .pw-label { font-size: 12px; font-weight: 700; margin-bottom: 7px; }
+  .pw-hints { display: flex; flex-wrap: wrap; gap: 5px 12px; list-style: none; padding: 0; margin: 0; }
+  .pw-hints li { font-size: 11.5px; color: var(--ink-faint); position: relative; padding-left: 15px; }
+  .pw-hints li::before { content: "○"; position: absolute; left: 0; }
+  .pw-hints li.ok { color: var(--accent); }
+  .pw-hints li.ok::before { content: "✓"; }
   .reg-perks {
     background: rgba(15,107,77,0.06); border: 1px solid rgba(15,107,77,0.14);
     border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; text-align: left;
@@ -1683,6 +1909,9 @@ const styles = `
     border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
   }
   .reg-consent-link { color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+  .req-star { color: #c0584f; font-weight: 700; margin-left: 2px; }
+  .reg-req-note { font-size: 11.5px; color: var(--ink-faint); margin: 2px 0 12px; }
+  .reg-req-note .req-star { margin-right: 3px; }
 
   /* ── плашка cookie ── */
   .cookie-bar {
@@ -1697,6 +1926,73 @@ const styles = `
   .cookie-text { flex: 1 1 320px; font-size: 12px; color: var(--ink-soft); line-height: 1.55; }
   .cookie-agree { white-space: nowrap; font-weight: 600; }
   .cookie-bar .btn:disabled { opacity: .55; cursor: default; }
+
+  /* ── «Добавить на экран Домой» (iOS) ── */
+  .a2hs-overlay { position: fixed; inset: 0; z-index: 800; display: flex; align-items: flex-end; justify-content: center;
+    background: rgba(10,30,22,0.42); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
+  .a2hs-sheet { width: 100%; max-width: 480px; background: rgba(252,254,253,0.99); position: relative;
+    border-radius: 22px 22px 0 0; padding: 22px 20px calc(20px + env(safe-area-inset-bottom));
+    box-shadow: 0 -16px 50px rgba(10,50,38,0.3); animation: a2hsUp .32s cubic-bezier(.23,1,.32,1); }
+  @keyframes a2hsUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  .a2hs-close { position: absolute; top: 14px; right: 14px; width: 30px; height: 30px; border-radius: 50%; border: none;
+    background: rgba(0,0,0,0.05); color: var(--ink-soft); font-size: 14px; cursor: pointer; }
+  .a2hs-head { display: flex; gap: 14px; align-items: center; margin-bottom: 16px; padding-right: 30px; }
+  .a2hs-icon { width: 52px; height: 52px; border-radius: 13px; flex-shrink: 0; box-shadow: 0 4px 14px rgba(15,107,77,0.25); }
+  .a2hs-title { font-family: 'Familjen Grotesk', sans-serif; font-size: 18px; font-weight: 700; color: var(--ink); letter-spacing: -0.02em; line-height: 1.2; }
+  .a2hs-sub { font-size: 13px; color: var(--ink-faint); margin-top: 4px; line-height: 1.45; }
+  .a2hs-benefits { list-style: none; padding: 0; margin: 0 0 16px; display: flex; flex-direction: column; gap: 8px; }
+  .a2hs-benefits li { font-size: 13.5px; color: var(--ink-soft); padding-left: 24px; position: relative; }
+  .a2hs-benefits li::before { content: "✓"; position: absolute; left: 2px; color: var(--accent); font-weight: 800; }
+  .a2hs-steps { background: color-mix(in srgb, var(--accent) 7%, transparent); border: 1px solid var(--glass-border);
+    border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 11px; margin-bottom: 16px; }
+  .a2hs-step { font-size: 13.5px; color: var(--ink); line-height: 1.45; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .a2hs-n { flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff;
+    font-size: 11px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
+  .a2hs-ok { width: 100%; padding: 13px; border-radius: 13px; border: none; cursor: pointer;
+    background: var(--accent-deep); color: #fff; font-family: inherit; font-weight: 700; font-size: 14.5px; }
+  .a2hs-ok:hover { background: var(--accent); }
+
+  /* ════════ Мобильная версия ════════ */
+  /* нижняя навигация — только на мобайле */
+  .bottom-nav { display: none; }
+  @media (max-width: 600px) {
+    /* шапка: убираем приветствие, разрешаем перенос кнопок, компактные отступы */
+    .topbar { height: auto; min-height: 54px; padding-top: 8px; padding-bottom: 8px; flex-wrap: wrap; gap: 10px; }
+    .topbar-user { display: none; }
+    .brand-text span { display: none; }
+    .brand-text b { font-size: 17px; }
+    .topbar-actions { gap: 6px; flex-wrap: wrap; justify-content: flex-end; row-gap: 6px; }
+    .topbar-actions .btn-sm { padding: 7px 11px; }
+    /* верхние вкладки прячем — вместо них нижняя навигация */
+    .tabs-bar { display: none; }
+    /* контент не должен прятаться за нижней навигацией */
+    .main { padding-bottom: 84px; }
+    /* ── нижняя навигация (bottom nav) ── */
+    .bottom-nav {
+      display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 150;
+      background: rgba(255,255,255,0.9);
+      backdrop-filter: blur(20px) saturate(150%); -webkit-backdrop-filter: blur(20px) saturate(150%);
+      border-top: 1px solid var(--glass-border);
+      box-shadow: 0 -6px 24px rgba(15,75,55,0.08);
+      padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    }
+    .bn-item { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 3px;
+      background: none; border: none; cursor: pointer; padding: 5px 2px; color: var(--ink-faint); font-family: inherit; }
+    .bn-item.active { color: var(--accent); }
+    .bn-ic { position: relative; display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; }
+    .bn-ic svg { width: 24px; height: 24px; }
+    .bn-label { font-size: 10.5px; font-weight: 600; letter-spacing: -0.01em; }
+    .bn-badge { position: absolute; top: -5px; right: -7px; min-width: 15px; height: 15px; padding: 0 3px;
+      border-radius: 100px; background: var(--accent); color: #fff; font-size: 9px; font-weight: 800;
+      display: flex; align-items: center; justify-content: center; line-height: 1; }
+    /* кабинет/настройки: топбар компактнее */
+    .lk-topbar { gap: 8px; padding: 11px 16px; }
+    .lk-topbar-title { font-size: 15px; }
+    .lk-back, .lk-top-logout { padding: 7px 12px; font-size: 13px; }
+  }
+  @media (max-width: 380px) {
+    .brand-mark { display: none; }
+  }
 
 `;
 
@@ -1774,11 +2070,22 @@ export default function App() {
   const [prodSort, setProdSort] = useState("recommend");   // recommend | date | price | name | type | brand
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [removeBgKey, setRemoveBgKey] = useState("");
-  const [showSettings, setShowSettings] = useState(false);
+  const [showKeyPanel, setShowKeyPanel] = useState(false); // панель ввода ключа remove.bg (только режим редактора)
+  const [showSettings, setShowSettings] = useState(false); // страница пользовательских настроек
   // freemium: тариф, использование за неделю, экран кабинета, paywall (причина|null)
   const [profile, setProfile] = useState(null);
   const [usage, setUsage] = useState({ search: 0, analysis: 0 });
   const [showProfile, setShowProfile] = useState(false);
+  // история просмотров средств — для личного кабинета (хранится на устройстве)
+  const [viewedHistory, setViewedHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("bh_viewed") || "[]"); } catch { return []; }
+  });
+  const recordViewed = (p) => setViewedHistory(prev => {
+    const entry = { id: p.id, name: p.name, brand: p.brand || null, image_url: p.image_url || null, product_type: p.product_type || null };
+    const next = [entry, ...prev.filter(x => x.id !== p.id)].slice(0, 24);
+    try { localStorage.setItem("bh_viewed", JSON.stringify(next)); } catch { /* localStorage недоступен */ }
+    return next;
+  });
   const [paywall, setPaywall] = useState(null);
   // локальный инкремент + лог; gate: бесплатнику сверх лимита — false и paywall
   const bumpUsage = (kind) => { logUsage(kind); setUsage(u => ({ ...u, [kind]: (u[kind] || 0) + 1 })); };
@@ -1792,6 +2099,12 @@ export default function App() {
   const addProductToCompare = (product) => {
     setCompareItems(prev => {
       if (prev.some(p => p.id === product.id)) return prev;
+      // сравнивать можно только средства одной категории (тип средства)
+      const baseType = prev[0]?.product_type;
+      if (prev.length && baseType && product.product_type && product.product_type !== baseType) {
+        setCompareMsg(`В сравнении уже «${baseType}» — добавлять можно средства той же категории.`);
+        return prev;
+      }
       const lim = compareLimit();
       if (prev.length >= lim) {
         // бесплатно сравнение до 2 — дальше paywall; pro до 5
@@ -1809,6 +2122,24 @@ export default function App() {
   const goCompare = () => { setDetail(null); setSelected(null); setTab("compare"); };
 
   useEffect(() => { restoreSession().then(ok => { setAuthed(ok); setAuthChecked(true); }); }, []);
+
+  // Escape закрывает верхнее открытое окно (как клик по фону) — для всех модалок.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (detail) return setDetail(null);
+      if (selected) return setSelected(null);
+      if (showAddProduct) return setShowAddProduct(false);
+      if (showAddIngredient) return setShowAddIngredient(false);
+      if (paywall) return setPaywall(null);
+      if (showPurchase) return setShowPurchase(false);
+      if (showSettings) return setShowSettings(false);
+      if (showProfile) return setShowProfile(false);
+      if (authScreen !== "landing") return setAuthScreen("landing");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [detail, selected, showAddProduct, showAddIngredient, paywall, showPurchase, showSettings, showProfile, authScreen]);
   // после входа: cookie-согласие в профиль, тариф и счётчики использования
   useEffect(() => {
     if (!authed) return;
@@ -1816,6 +2147,30 @@ export default function App() {
     loadProfile().then(p => setProfile(p));
     loadUsage().then(setUsage);
   }, [authed]);
+
+  // Возврат с оплаты Робокассы (Success/Fail URL): ?payment=success|fail.
+  // Подтверждение тарифа приходит серверным колбэком (robokassa-result),
+  // поэтому профиль опрашиваем несколько раз, пока не увидим pro.
+  const paymentReturnRef = useRef(false);
+  useEffect(() => {
+    if (!authChecked || paymentReturnRef.current) return;
+    const sp = new URLSearchParams(window.location.search);
+    const pr = sp.get("payment");
+    if (!pr) return;
+    paymentReturnRef.current = true;
+    sp.delete("payment");
+    const clean = window.location.pathname + (sp.toString() ? `?${sp}` : "") + window.location.hash;
+    window.history.replaceState({}, "", clean);
+    if (pr !== "success") return;
+    setPurchaseToast(true);
+    setTimeout(() => setPurchaseToast(false), 5000);
+    let tries = 0;
+    const poll = () => loadProfile().then(p => {
+      setProfile(p);
+      if (!isPro() && ++tries < 5) setTimeout(poll, 2000);
+    });
+    poll();
+  }, [authChecked]);
 
   // Учёт поиска: одна «единица» за устоявшийся уникальный запрос (с дебаунсом),
   // не за каждый символ. Бесплатнику сверх недельного лимита — paywall.
@@ -1833,7 +2188,7 @@ export default function App() {
 
   const loadProducts = useCallback(async () => {
     setLoading(true); setError("");
-    const PAGE = 200;
+    const PAGE = 60; // маленькая первая страница — быстрый первый экран, остальное догружаем фоном
     const path = "/products?select=*,notes&order=name.asc";
     try {
       // 1) первая страница — показываем сразу
@@ -1862,7 +2217,7 @@ export default function App() {
 
   const loadIngredients = useCallback(async () => {
     setLoading(true); setError("");
-    const PAGE = 300;
+    const PAGE = 90; // быстрый первый экран, остальное догружаем фоном
     const path = "/ingredients?select=id,inci_name,ru_name,aliases,description,is_eu_allergen," +
       "ingredient_groups(group,subgroup,subgroup2,is_primary)&order=inci_name.asc";
     try {
@@ -1914,6 +2269,7 @@ export default function App() {
   // ВАЖНО: в compoCache лежат УЖЕ адаптированные строки (adaptRow).
   // Поэтому при попадании в кэш повторно adaptRow вызывать нельзя — иначе состав «обнуляется».
   const openProduct = async (product) => {
+    recordViewed(product);
     if (compoCache[product.id]) {
       setSelected({
         ...product,
@@ -2143,7 +2499,7 @@ export default function App() {
     </>
   );
 
-  if (!authChecked) return (<><style>{styles}</style><div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(168deg,#eef5f3,#e0eeea)" }}><div className="loading-dots"><span /><span /><span /></div></div></>);
+  if (!authChecked) return (<><style>{styles}</style><div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(168deg,#eef5f3,#e0eeea)" }}><LoadingMascot /></div></>);
   if (!authed) return (
     <>
       <style>{styles}</style>
@@ -2173,6 +2529,7 @@ export default function App() {
       {showPurchase && <PurchaseModal onClose={() => setShowPurchase(false)} onSuccess={purchaseDone} />}
       {purchaseToast && <div className="purchase-toast">Подписка оформлена</div>}
       <CookieConsent />
+      <AddToHomeScreen />
     </>
   );
 
@@ -2183,9 +2540,17 @@ export default function App() {
       {purchaseToast && <div className="purchase-toast">Подписка оформлена</div>}
       {showProfile && (
         <ProfileScreen profile={profile} usage={usage} pro={isPro()}
+          viewed={viewedHistory}
+          onOpenProduct={(p) => { setShowProfile(false); openProduct(p); }}
+          onOpenSettings={() => setShowSettings(true)}
           onClose={() => setShowProfile(false)}
           onSubscribe={() => { setShowProfile(false); setShowPurchase(true); }}
           onLogout={() => { signOut(); setAuthed(false); setShowProfile(false); setAuthScreen("landing"); setShowPurchase(false); }} />
+      )}
+      {showSettings && (
+        <SettingsScreen
+          onClose={() => setShowSettings(false)}
+          onLogout={() => { signOut(); setAuthed(false); setShowSettings(false); setShowProfile(false); setAuthScreen("landing"); setShowPurchase(false); }} />
       )}
       {paywall && (
         <Paywall reason={paywall}
@@ -2193,6 +2558,7 @@ export default function App() {
           onSubscribe={() => { setPaywall(null); setShowPurchase(true); }} />
       )}
       <CookieConsent />
+      <AddToHomeScreen />
       <div className="app">
         <PetalsBackground />
         <div className="topbar">
@@ -2262,7 +2628,9 @@ export default function App() {
             )}
             {isAdmin() && editorMode && tab === "products" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddProduct(true)}>+ Средство</button>}
             {isAdmin() && editorMode && tab === "ingredients" && <button className="btn btn-primary btn-sm" onClick={() => setShowAddIngredient(true)}>+ Ингредиент</button>}
-            {isAdmin() && <button className="btn btn-glass btn-sm" onClick={() => setShowSettings(s => !s)} title="Настройки">⚙</button>}
+            {/* Ключ remove.bg нужен только при добавлении средств — показываем лишь в режиме редактора */}
+            {isAdmin() && editorMode && <button className="btn btn-glass btn-sm" onClick={() => setShowKeyPanel(s => !s)} title="API-ключ remove.bg">🔑</button>}
+            <button className="btn btn-glass btn-sm" onClick={() => setShowSettings(true)} title="Настройки">⚙</button>
             <button className="btn btn-glass btn-sm profile-btn" onClick={() => setShowProfile(true)} title="Личный кабинет">
               <span className="profile-ava">{(userName()?.[0] || "Я").toUpperCase()}</span>
               <span className={`tariff-pill ${isPro() ? "pro" : ""}`}>{isPro() ? "PRO" : "FREE"}</span>
@@ -2271,7 +2639,7 @@ export default function App() {
           </div>
         </div>
 
-        {showSettings && (
+        {showKeyPanel && (
           <div style={{ background: "rgba(20,40,32,0.9)", padding: "12px 2rem", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <span style={{ fontSize: 12, color: "#cbd8cf", flexShrink: 0 }}>API-ключ remove.bg:</span>
             <input type="password" value={removeBgKey} onChange={e => setRemoveBgKey(e.target.value)}
@@ -2289,6 +2657,25 @@ export default function App() {
             <button className={`tab ${tab === "compare" ? "active" : ""}`} onClick={() => { setTab("compare"); setSearch(""); }}>Сравнение</button>
           </div>
         </div>
+
+        {/* Мобильная нижняя навигация — привычный паттерн для разделов на телефоне */}
+        <nav className="bottom-nav">
+          {[
+            { k: "products",    label: "Средства",    icon: <path d="M9 3h6M10 3v3.2L7.6 9.6A3.6 3.6 0 0 0 7 11.7V18a3 3 0 0 0 3 3h4a3 3 0 0 0 3-3v-6.3a3.6 3.6 0 0 0-.6-2.1L14 6.2V3M7.2 14h9.6" /> },
+            { k: "ingredients", label: "Ингредиенты", icon: <path d="M12 3s6 6.5 6 10.5a6 6 0 1 1-12 0C6 9.5 12 3 12 3z" /> },
+            { k: "similar",     label: "Аналоги",     icon: <path d="M4 8h10l-2.4-2.4M4 8l2.4 2.4M20 16H10l2.4 2.4M20 16l-2.4-2.4" /> },
+            { k: "compare",     label: "Сравнение",   icon: <path d="M6 20V10M12 20V4M18 20v-7" />, badge: compareItems.length },
+          ].map(t => (
+            <button key={t.k} className={`bn-item ${tab === t.k ? "active" : ""}`}
+              onClick={() => { setTab(t.k); setSearch(""); window.scrollTo({ top: 0 }); }}>
+              <span className="bn-ic">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{t.icon}</svg>
+                {t.badge ? <span className="bn-badge">{t.badge}</span> : null}
+              </span>
+              <span className="bn-label">{t.label}</span>
+            </button>
+          ))}
+        </nav>
 
         <div className="main">
           {error && <div className="error-msg">{error}</div>}
@@ -2360,7 +2747,7 @@ export default function App() {
                     <div className="count">{filteredProducts.length} позиций</div>
                   </div>
                 </div>
-                {loading ? <LoadingMascot />
+                {loading ? <SkeletonGrid />
                   : filteredProducts.length === 0 ? (
                     <div className="empty-state">
                       <span className="empty-ic">◇</span>
@@ -2427,6 +2814,7 @@ export default function App() {
             loadAllCompositions={loadAllCompositions}
             inCompare={compareItems.some(p => p.id === selected.id)}
             compareCount={compareItems.length} compareMax={compareLimit()}
+            compareBaseType={compareItems[0]?.product_type || null}
             onAddToCompare={() => addProductToCompare(selected)}
             onGoCompare={goCompare}
             onImageSaved={async (id, url) => {
@@ -2448,7 +2836,7 @@ export default function App() {
             onClose={() => setDetail(null)} />
         )}
         {showAddProduct && (
-          <AddProductModal ingredients={ingredients} removeBgKey={removeBgKey}
+          <AddProductModal ingredients={ingredients} products={products} removeBgKey={removeBgKey}
             onClose={() => setShowAddProduct(false)}
             onSaved={() => { setShowAddProduct(false); loadProducts(); }} />
         )}
@@ -2858,7 +3246,7 @@ function compositionSummary(product) {
   return { text: parts.join(" · "), fns, allergens };
 }
 
-function ProductModal({ product, onClose, onOpenDetail, onOpenProduct, subgroupDesc, allProducts = [], compoCache = {}, loadAllCompositions, onImageSaved, onDelete, removeBgKey, editorMode = false, inCompare = false, compareCount = 0, compareMax = 5, onAddToCompare, onGoCompare }) {
+function ProductModal({ product, onClose, onOpenDetail, onOpenProduct, subgroupDesc, allProducts = [], compoCache = {}, loadAllCompositions, onImageSaved, onDelete, removeBgKey, editorMode = false, inCompare = false, compareCount = 0, compareMax = 5, compareBaseType = null, onAddToCompare, onGoCompare }) {
   const [editingImage, setEditingImage] = useState(false);
   // подстраховка: если фоновая загрузка составов ещё не прошла, дотягиваем здесь,
   // чтобы «Похожие по составу» считались по всей базе, а не только по открытым.
@@ -2965,9 +3353,12 @@ function ProductModal({ product, onClose, onOpenDetail, onOpenProduct, subgroupD
                 </div>
               );
             })()}
+            {(() => {
+              const typeMismatch = !inCompare && compareBaseType && product.product_type && product.product_type !== compareBaseType;
+              return (<>
             <div className="cmp-add-row">
               <button className={`btn btn-sm ${inCompare ? "btn-glass is-added" : "btn-glass"}`}
-                onClick={onAddToCompare} disabled={inCompare || compareCount >= compareMax}>
+                onClick={onAddToCompare} disabled={inCompare || compareCount >= compareMax || typeMismatch}>
                 {inCompare ? "✓ В сравнении" : "＋ Добавить в сравнение"}
               </button>
               {compareCount > 0 && (
@@ -2976,9 +3367,14 @@ function ProductModal({ product, onClose, onOpenDetail, onOpenProduct, subgroupD
                 </button>
               )}
             </div>
-            {!inCompare && compareCount >= compareMax && (
+            {typeMismatch && (
+              <div className="cmp-add-note">В сравнении уже «{compareBaseType}». Сравнивать можно средства одной категории — очистите сравнение, чтобы начать заново.</div>
+            )}
+            {!typeMismatch && !inCompare && compareCount >= compareMax && (
               <div className="cmp-add-note">Добавлено максимальное количество средств для сравнения</div>
             )}
+              </>);
+            })()}
             {editorMode && (!editingImage ? (
               <button className="btn btn-glass btn-sm photo-btn" onClick={() => setEditingImage(true)}>
                 {product.image_url ? "Заменить фото" : "＋ Добавить фото"}
@@ -3309,7 +3705,7 @@ function CompareTab({ onOpenProduct, items = [], onRemove, onClear, allProducts 
       <div className="sim-tab">
         <div className="section-head"><div className="section-title">Сравнение</div></div>
         <div className="cmp-empty">
-          <p className="sim-intro" style={{ marginBottom: 14 }}>Здесь можно сравнить до 5 средств между собой: функции, состав, безопасность, стоимость и заметки.</p>
+          <p className="sim-intro" style={{ marginBottom: 14 }}>Здесь можно сравнить до 5 средств одной категории: функции, состав, безопасность, стоимость и комментарии.</p>
           <p className="dm-muted">Откройте карточку любого средства и нажмите «Добавить в сравнение».</p>
         </div>
       </div>
@@ -3407,7 +3803,7 @@ function CompareTab({ onOpenProduct, items = [], onRemove, onClear, allProducts 
               })}
             </tr>
             <tr>
-              <td className="cmp-row-label">Заметка</td>
+              <td className="cmp-row-label">Комментарий</td>
               {items.map(p => (
                 <td key={p.id} className="cmp-cell">
                   {p.notes && String(p.notes).trim() ? <span className="cmp-note-text">{String(p.notes).trim()}</span> : <span className="dm-muted">нет</span>}
@@ -3601,7 +3997,7 @@ function IngredientsTab({ data = [], loading, onOpenDetail, editorMode = false, 
         </div>
       </div>
 
-      {loading ? <LoadingMascot /> : (
+      {loading ? <SkeletonRows /> : (
         <div className="table-wrap">
           <table>
             <thead>
@@ -3643,7 +4039,7 @@ function IngredientsTab({ data = [], loading, onOpenDetail, editorMode = false, 
                       ? <span className={`g-tag ${editorMode ? "cell-edit-hint" : ""}`} style={{ display: "inline-block", background: groupColor(i.group) + "1f", color: groupColor(i.group), cursor: "pointer" }} onClick={() => openGroup(i.group)}>{i.group}</span>
                       : <span style={{ color: "var(--ink-faint)" }}>–</span>}
                   </td>
-                  <td style={{ color: "var(--ink-soft)", fontSize: 13 }}>
+                  <td style={{ color: "var(--ink-soft)", fontSize: 14.5, fontWeight: 600 }}>
                     {i.subgroup
                       ? <span className="inci-link" onClick={() => openGroup(i.group, i.subgroup)}>{i.subgroup}</span>
                       : "–"}
@@ -4028,7 +4424,26 @@ function ImagePicker({ onDone, removeBgKey }) {
   );
 }
 
-function AddProductModal({ ingredients, onClose, onSaved, removeBgKey }) {
+// Поиск возможных дубликатов в каталоге по названию (+ бренду, если задан).
+// Нормализуем регистр/пробелы; ловим точные, вложенные и почти совпадающие имена.
+function findDuplicateProducts(name, brand, list = []) {
+  const norm = (s) => (s || "").toString().toLowerCase().replace(/\s+/g, " ").trim();
+  const n = norm(name), b = norm(brand);
+  if (!n) return [];
+  return list.filter((p) => {
+    const pn = norm(p.name), pb = norm(p.brand);
+    if (!pn) return false;
+    const nameClose = pn === n
+      || (n.length > 4 && (pn.includes(n) || n.includes(pn)))
+      || levDist(pn, n, 2) <= 2;
+    if (!nameClose) return false;
+    if (b && pb) return pb === b || pb.includes(b) || b.includes(pb) || levDist(pb, b, 1) <= 1;
+    return true;
+  }).slice(0, 6);
+}
+
+function AddProductModal({ ingredients, products = [], onClose, onSaved, removeBgKey }) {
+  const [dupes, setDupes] = useState([]);
   const [name, setName] = useState("");
   const [brand, setBrand] = useState("");
   const [finalImageUrl, setFinalImageUrl] = useState(null);
@@ -4043,9 +4458,14 @@ function AddProductModal({ ingredients, onClose, onSaved, removeBgKey }) {
   const updateIngredient = (idx, val) => setParsed(p => p.map((x, i) => i === idx ? val : x));
   const insertAfter = (idx) => setParsed(p => { const n = [...p]; n.splice(idx + 1, 0, ""); return n; });
 
-  const save = async () => {
+  const save = async (force = false) => {
     if (!name.trim()) { setError("Введите название средства"); return; }
-    setSaving(true); setError("");
+    // проверка дубликатов: предупреждаем, но разрешаем добавить принудительно
+    if (!force) {
+      const found = findDuplicateProducts(name, brand, products);
+      if (found.length) { setDupes(found); setError(""); return; }
+    }
+    setSaving(true); setError(""); setDupes([]);
     try {
       const [product] = await sbFetch("/products", {
         method: "POST",
@@ -4145,9 +4565,24 @@ function AddProductModal({ ingredients, onClose, onSaved, removeBgKey }) {
           </div>
         )}
 
+        {dupes.length > 0 && (
+          <div style={{ marginTop: "1rem", padding: "12px 14px", borderRadius: 10, background: "rgba(201,138,58,0.10)", border: "1px solid rgba(201,138,58,0.32)" }}>
+            <div style={{ fontWeight: 700, fontSize: 13, color: "#9a6b22", marginBottom: 7 }}>
+              Возможно, такое средство уже есть в каталоге:
+            </div>
+            <ul style={{ margin: "0 0 10px", paddingLeft: 18, fontSize: 13, color: "var(--ink-soft)", lineHeight: 1.6 }}>
+              {dupes.map(d => <li key={d.id}>{d.name}{d.brand ? ` · ${d.brand}` : ""}</li>)}
+            </ul>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-glass btn-sm" onClick={() => setDupes([])}>Проверю и поправлю</button>
+              <button className="btn btn-primary btn-sm" onClick={() => save(true)} disabled={saving}>Всё равно добавить</button>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: "1rem" }}>
           <button className="btn btn-ghost" onClick={onClose}>Отмена</button>
-          <button className="btn btn-primary" onClick={save} disabled={saving || !name.trim()}>
+          <button className="btn btn-primary" onClick={() => save()} disabled={saving || !name.trim()}>
             {saving ? "Сохранение..." : `Сохранить${realCount > 0 ? ` (${realCount} ингр.)` : ""}`}
           </button>
         </div>
@@ -4266,6 +4701,60 @@ function PetalsBackground() {
 }
 
 // ─── ЗАГРУЗОЧНЫЙ ЭКРАН С МАСКОТОМ ────────────────────────────────────────────
+// Индикатор надёжности пароля + подсказки. Используется в регистрации и кабинете.
+function PasswordStrength({ pw }) {
+  const { score, label, color, checks } = passwordStrength(pw);
+  if (!pw) return null;
+  return (
+    <div className="pw-meter">
+      <div className="pw-bar">
+        {[0, 1, 2, 3].map(i => <div key={i} className="pw-seg" style={{ background: i < score ? color : "rgba(0,0,0,0.10)" }} />)}
+      </div>
+      <div className="pw-label" style={{ color }}>{label}</div>
+      <ul className="pw-hints">
+        <li className={checks.len ? "ok" : ""}>от 8 символов</li>
+        <li className={checks.case ? "ok" : ""}>строчные и ЗАГЛАВНЫЕ</li>
+        <li className={checks.digit ? "ok" : ""}>цифра</li>
+        <li className={checks.special ? "ok" : ""}>символ (!@#…)</li>
+      </ul>
+    </div>
+  );
+}
+
+// Скелетон сетки средств — структура появляется сразу, пока грузится первая страница.
+function SkeletonGrid({ count = 12 }) {
+  return (
+    <div className="grid" aria-hidden="true">
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="sk-card">
+          <div className="sk sk-media" />
+          <div className="sk-body">
+            <div className="sk sk-line" style={{ width: "90%" }} />
+            <div className="sk sk-line" style={{ width: "65%" }} />
+            <div className="sk sk-line" style={{ width: "40%", marginTop: 4 }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Скелетон строк справочника ингредиентов.
+function SkeletonRows({ count = 10 }) {
+  return (
+    <div aria-hidden="true" style={{ padding: "0 4px" }}>
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="sk-row">
+          <div className="sk sk-line" style={{ width: "26%" }} />
+          <div className="sk sk-line" style={{ width: "18%" }} />
+          <div className="sk sk-line" style={{ width: "14%" }} />
+          <div className="sk sk-line" style={{ flex: 1 }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function LoadingMascot() {
   const [pupil, setPupil] = useState({ x: 0, y: 0 });
   const faceRef = useRef(null);
@@ -4409,7 +4898,7 @@ function LoginScreen({ onSuccess, onShowRegister, onBack }) {
   const onEnter = (e) => { if (e.key === "Enter") submit(); };
 
   return (
-    <div className="login3-wrap">
+    <div className="login3-wrap" onClick={e => { if (onBack && !e.target.closest(".login3-card")) onBack(); }}>
       <div className="login3-stage">
         <MascotFigure shut={shut} />
 
@@ -4423,8 +4912,8 @@ function LoginScreen({ onSuccess, onShowRegister, onBack }) {
           <div className="login3-field">
             <label className="login3-label" htmlFor="login-email">Почта</label>
             <input id="login-email" className="login3-input" type="email" value={email}
-              autoComplete="username" name="username" placeholder="you@example.com"
-              onChange={e => { setEmail(e.target.value); if (error) setError(""); }}
+              autoComplete="username" name="username" placeholder="you@example.com" inputMode="email"
+              onChange={e => { setEmail(sanitizeEmail(e.target.value)); if (error) setError(""); }}
               onKeyDown={onEnter} autoFocus />
           </div>
           <div className="login3-field">
@@ -4462,6 +4951,7 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
+  const [pass, setPass] = useState("");
   // согласия: оферта и обработка ПД обязательны, рассылка — по желанию
   const [agreeOffer, setAgreeOffer] = useState(false);
   const [agreePd, setAgreePd] = useState(false);
@@ -4474,7 +4964,7 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
     if (m.includes("rate") || m.includes("too many") || m.includes("limit") || m.includes("seconds"))
       return "Слишком много попыток. Попробуйте чуть позже";
     if (m.includes("invalid") || m.includes("expired") || m.includes("token"))
-      return "Код не подошёл. Проверьте цифры или запросите новый";
+      return "Код не совпал. Проверьте все 6 цифр из письма или запросите новый";
     if (m.includes("network") || m.includes("fetch"))
       return "Нет соединения. Проверьте интернет";
     return msg || "Что-то пошло не так. Попробуйте ещё раз";
@@ -4483,6 +4973,7 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
   const sendCode = async () => {
     if (!name.trim()) { setError("Введите имя"); return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { setError("Проверьте формат почты"); return; }
+    if (phone.replace(/\D/g, "").length < 10) { setError("Введите контактный телефон"); return; }
     if (!agreeOffer) { setError("Для регистрации нужно согласие с условиями Оферты"); return; }
     if (!agreePd) { setError("Для регистрации нужно согласие на обработку персональных данных"); return; }
     setBusy(true); setError("");
@@ -4507,18 +4998,33 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
     finally { setBusy(false); }
   };
 
+  const savePassword = async () => {
+    const st = passwordStrength(pass);
+    if (pass.length < 8) { setError("Пароль должен быть не короче 8 символов"); return; }
+    if (st.score < 2) { setError("Пароль слишком простой — добавьте буквы разного регистра, цифры или символ"); return; }
+    setBusy(true); setError("");
+    try { await setAccountPassword(pass); setStep(4); }
+    catch (e) { setError(humanError(e.message)); }
+    finally { setBusy(false); }
+  };
+
   const consentLink = (href, text) => (
     <a className="reg-consent-link" href={href} target="_blank" rel="noopener noreferrer">{text}</a>
   );
 
+  // Кнопка «Получить код» активна, только когда заполнены обязательные поля
+  // (имя, почта, телефон) и отмечены обязательные согласия (оферта, ПД/политика).
+  const canSubmit = name.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+    && phone.replace(/\D/g, "").length >= 10 && agreeOffer && agreePd;
+
   const progress = (
     <div className="reg-progress">
-      {[1, 2, 3].map(s => <div key={s} className={`reg-progress-seg ${s <= step ? "on" : ""}`} />)}
+      {[1, 2, 3, 4].map(s => <div key={s} className={`reg-progress-seg ${s <= step ? "on" : ""}`} />)}
     </div>
   );
 
   return (
-    <div className="login3-wrap">
+    <div className="login3-wrap" onClick={e => { if (onBack && !e.target.closest(".login3-card")) onBack(); }}>
       <div className="login3-stage">
         <MascotFigure />
 
@@ -4530,30 +5036,30 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
               <h1 className="login3-title">Создать аккаунт</h1>
               <p className="login3-sub">Бесплатно. Без привязки карты.</p>
               <div className="reg-perks">
-                {["7 поисков по базе средств в неделю", "3 анализа своих средств в неделю", "Краткий тест на тип кожи и волос"].map(t => (
+                {["7 поисков по каталогу средств в неделю", "3 анализа своих средств в неделю", "Краткий тест на тип кожи и волос"].map(t => (
                   <div key={t} className="reg-perk"><span className="reg-perk-dot" />{t}</div>
                 ))}
               </div>
               {error && <div className="login3-error">{error}</div>}
               <div className="login3-field">
-                <label className="login3-label" htmlFor="reg-name">Имя</label>
+                <label className="login3-label" htmlFor="reg-name">Имя<span className="req-star">*</span></label>
                 <input id="reg-name" className="login3-input" type="text" value={name}
                   autoComplete="given-name" placeholder="Как к вам обращаться?" autoFocus
                   onChange={e => { setName(e.target.value); if (error) setError(""); }}
                   onKeyDown={e => e.key === "Enter" && sendCode()} />
               </div>
               <div className="login3-field">
-                <label className="login3-label" htmlFor="reg-email">Почта</label>
+                <label className="login3-label" htmlFor="reg-email">Почта<span className="req-star">*</span></label>
                 <input id="reg-email" className="login3-input" type="email" value={email}
-                  autoComplete="email" placeholder="you@example.com"
-                  onChange={e => { setEmail(e.target.value); if (error) setError(""); }}
+                  autoComplete="email" placeholder="you@example.com" inputMode="email"
+                  onChange={e => { setEmail(sanitizeEmail(e.target.value)); if (error) setError(""); }}
                   onKeyDown={e => e.key === "Enter" && sendCode()} />
               </div>
               <div className="login3-field">
-                <label className="login3-label" htmlFor="reg-phone">Контактный телефон</label>
+                <label className="login3-label" htmlFor="reg-phone">Контактный телефон<span className="req-star">*</span></label>
                 <input id="reg-phone" className="login3-input" type="tel" value={phone}
-                  autoComplete="tel" placeholder="+7 ___ ___-__-__"
-                  onChange={e => { setPhone(e.target.value); if (error) setError(""); }}
+                  autoComplete="tel" placeholder="+7 ___ ___-__-__" inputMode="tel"
+                  onChange={e => { setPhone(sanitizePhone(e.target.value)); if (error) setError(""); }}
                   onKeyDown={e => e.key === "Enter" && sendCode()} />
               </div>
 
@@ -4561,11 +5067,11 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
               <div className="reg-consents">
                 <label className="reg-consent">
                   <input type="checkbox" checked={agreeOffer} onChange={e => { setAgreeOffer(e.target.checked); if (error) setError(""); }} />
-                  <span>Согласен с условиями {consentLink(LEGAL.offer, "Оферты")}</span>
+                  <span>Согласен с условиями {consentLink(LEGAL.offer, "Оферты")}<span className="req-star">*</span></span>
                 </label>
                 <label className="reg-consent">
                   <input type="checkbox" checked={agreePd} onChange={e => { setAgreePd(e.target.checked); if (error) setError(""); }} />
-                  <span>Даю {consentLink(LEGAL.pdConsent, "согласие")} на обработку моих персональных данных в соответствии с {consentLink(LEGAL.policy, "Политикой")}</span>
+                  <span>Даю {consentLink(LEGAL.pdConsent, "согласие")} на обработку моих персональных данных в соответствии с {consentLink(LEGAL.policy, "Политикой")}<span className="req-star">*</span></span>
                 </label>
                 <label className="reg-consent">
                   <input type="checkbox" checked={agreeAds} onChange={e => setAgreeAds(e.target.checked)} />
@@ -4573,7 +5079,7 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
                 </label>
               </div>
 
-              <button className="login3-btn" onClick={sendCode} disabled={busy}>
+              <button className="login3-btn" onClick={sendCode} disabled={busy || !canSubmit}>
                 <span>{busy ? "Отправляем код…" : "Получить код подтверждения"}</span>
               </button>
               <div className="login3-links">
@@ -4607,11 +5113,33 @@ function RegisterScreen({ onSuccess, onShowLogin, onBack, onPurchase }) {
 
           {step === 3 && (
             <>
+              <h1 className="login3-title">Придумайте пароль</h1>
+              <p className="login3-sub">Чтобы в следующий раз входить по почте и паролю — быстро и без кода.</p>
+              {error && <div className="login3-error">{error}</div>}
+              <div className="login3-field">
+                <label className="login3-label" htmlFor="reg-pass">Пароль</label>
+                <input id="reg-pass" className="login3-input" type="password" value={pass}
+                  autoComplete="new-password" placeholder="Минимум 8 символов" autoFocus
+                  onChange={e => { setPass(e.target.value); if (error) setError(""); }}
+                  onKeyDown={e => e.key === "Enter" && savePassword()} />
+              </div>
+              <PasswordStrength pw={pass} />
+              <button className="login3-btn" onClick={savePassword} disabled={busy}>
+                <span>{busy ? "Сохраняем…" : "Сохранить пароль"}</span>
+              </button>
+              <div className="login3-links">
+                <button className="login3-link login3-link-muted" onClick={() => setStep(4)}>Пропустить — задам пароль позже в кабинете</button>
+              </div>
+            </>
+          )}
+
+          {step === 4 && (
+            <>
               <h1 className="login3-title">{name.trim() ? `${name.trim()}, добро пожаловать!` : "Добро пожаловать!"}</h1>
               <p className="login3-sub">Аккаунт создан. Вам доступно:</p>
               <div className="reg-perks reg-perks-free">
                 <div className="reg-perks-head">Доступно сейчас</div>
-                {["7 поисков по базе средств в неделю", "3 анализа своих средств в неделю",
+                {["7 поисков по каталогу средств в неделю", "3 анализа своих средств в неделю",
                   "Краткий тест на тип кожи и волос", "Справочник 20 000+ ингредиентов", "Сравнение до 2 средств"].map(t => (
                   <div key={t} className="reg-perk"><span className="reg-perk-check">✓</span>{t}</div>
                 ))}
@@ -4715,67 +5243,407 @@ function Paywall({ reason, onClose, onSubscribe }) {
   );
 }
 
-// Личный кабинет: тариф, использование за неделю, данные аккаунта, выход.
-function ProfileScreen({ profile, usage, pro, onClose, onSubscribe, onLogout }) {
+// Личный кабинет — отдельная страница: ценностные блоки (текущий уход, карта
+// пробелов, персональные схемы, дневник прогресса, тесты, статьи). Без формы
+// данных и смены пароля — упор на пользу, ради которой оформляют подписку.
+function ProfileScreen({ profile, usage, pro, onClose, onSubscribe, onLogout, viewed = [], onOpenProduct, onOpenSettings }) {
   const meta = CURRENT_USER?.user_metadata || {};
-  const name = meta.name || "";
   const email = CURRENT_USER?.email || "";
-  const phone = meta.phone || "";
-  const proUntil = profile?.pro_until ? new Date(profile.pro_until).toLocaleDateString("ru-RU") : null;
+  const name = meta.name || "";
+  const initial = (name[0] || email[0] || "Я").toUpperCase();
+
+  // пример карты «покрытия» ухода для наглядного графика (до анализа реальной полки)
+  const coverage = [
+    { label: "Очищение", val: 80 },
+    { label: "Увлажнение", val: 55 },
+    { label: "Активы", val: 30 },
+    { label: "Защита (SPF)", val: 15 },
+    { label: "Восстановление", val: 45 },
+  ];
+  const tests = [
+    { ic: "💆", name: "Тип кожи головы", desc: "Жирность, чувствительность, перхоть" },
+    { ic: "🧴", name: "Тип кожи лица", desc: "Сухость, жирность, реакции" },
+    { ic: "💇", name: "Состояние волос", desc: "Пористость, ломкость, объём" },
+  ];
+  const articles = [
+    { t: "Как читать состав за две минуты", d: "С чего начать и на что смотреть в первую очередь" },
+    { t: "Привычки, которые портят волосы", d: "Простые шаги, что поменять уже сегодня" },
+    { t: "Аксессуары для волос", d: "Расчёски, полотенца, наволочки: что выбрать" },
+  ];
+
   return (
-    <div className="reg-overlay lk-overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="lk-card">
-        <button className="lk-close" onClick={onClose} aria-label="Закрыть">✕</button>
-        <div className="lk-head">
-          <div className="lk-ava">{(name[0] || "Я").toUpperCase()}</div>
-          <div>
-            <div className="lk-name">{name || "Личный кабинет"}</div>
-            {email && <div className="lk-email">{email}</div>}
+    <div className="lk-page">
+      <div className="lk-topbar">
+        <button className="lk-back" onClick={onClose}>← Каталог</button>
+        <span className="lk-topbar-title">Личный кабинет</span>
+        <button className="lk-top-ico" style={{ marginLeft: "auto" }} onClick={onOpenSettings} title="Настройки">⚙</button>
+        <button className="lk-top-logout" style={{ marginLeft: 0 }} onClick={onLogout}>Выйти</button>
+      </div>
+      <div className="lk-wrap">
+        <div className="lk-stack">
+
+          <div className="lk-hero">
+            <div className="lk-hero-ava">{initial}</div>
+            <div>
+              <div className="lk-hero-name">{name ? `Привет, ${name}!` : "Ваш кабинет"}</div>
+              <div className="lk-hero-email">{pro ? "Подписка PRO активна" : "Бесплатный тариф"}</div>
+            </div>
+            {!pro && <button className="lk-pill-cta" onClick={onSubscribe}>Открыть PRO</button>}
           </div>
+
+          {/* A. Текущий уход — точка входа */}
+          <section className="lk-hero-card">
+            <div className="lk-hero-card-tag">Начните отсюда</div>
+            <h2 className="lk-hero-card-title">Соберём Вашу полку ухода</h2>
+            <p className="lk-hero-card-text">Добавьте средства, которыми пользуетесь сейчас. Мы разберём составы, запомним Вашу рутину и покажем, что уже работает и что стоит добавить.</p>
+            <div className="lk-slots">
+              {[0, 1, 2, 3].map(i => <div key={i} className="lk-slot">＋</div>)}
+            </div>
+            <button className="lk-primary">Собрать мой уход</button>
+          </section>
+
+          {/* B. Карта пробелов — график */}
+          <section className="lk-block lk-block-airy">
+            <div className="lk-block-title">Что уже закрыто и где пробел</div>
+            <p className="lk-sub">Когда Вы добавите средства, здесь появится карта Вашего ухода по задачам. Сейчас показан пример.</p>
+            <div className="lk-bars">
+              {coverage.map(c => (
+                <div key={c.label} className="lk-bar-row">
+                  <div className="lk-bar-label">{c.label}</div>
+                  <div className="lk-bar-track"><div className="lk-bar-fill" style={{ width: `${c.val}%`, background: c.val < 35 ? "#c98a3a" : "linear-gradient(90deg,#2a9b73,#0f6b4d)" }} /></div>
+                  <div className="lk-bar-val" style={{ color: c.val < 35 ? "#c98a3a" : "var(--ink-faint)" }}>{c.val < 35 ? "пробел" : `${c.val}%`}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* C, D. Персональные схемы */}
+          <div className="lk-two">
+            <section className="lk-banner hair">
+              <div className="lk-banner-ic">💆</div>
+              <div className="lk-banner-body">
+                <div className="lk-banner-name">Схема ухода за волосами <span className="lk-badge pro">PRO</span></div>
+                <div className="lk-banner-text">Пройдите большой тест по волосам, и мы соберём пошаговую программу под Ваш тип кожи головы и состояние волос.</div>
+                <button className="lk-ghost" onClick={onSubscribe}>Пройти тест</button>
+              </div>
+            </section>
+            <section className="lk-banner face">
+              <div className="lk-banner-ic">✨</div>
+              <div className="lk-banner-body">
+                <div className="lk-banner-name">Схема ухода за лицом <span className="lk-badge pro">PRO</span></div>
+                <div className="lk-banner-text">Определим тип кожи и задачи, подберём активы и порядок нанесения утром и вечером.</div>
+                <button className="lk-ghost" onClick={onSubscribe}>Пройти тест</button>
+              </div>
+            </section>
+          </div>
+
+          {/* E. Дневник прогресса по фото */}
+          <section className="lk-block lk-block-airy">
+            <div className="lk-block-title">Дневник прогресса <span className="lk-badge pro">PRO</span></div>
+            <p className="lk-sub">Загружайте фото раз в неделю и наблюдайте, как меняются волосы и кожа.</p>
+            <div className="lk-weeks">
+              {[1, 2, 3, 4, 5, 6].map(w => (
+                <div key={w} className="lk-week">
+                  <div className="lk-week-photo">＋</div>
+                  <div className="lk-week-n">Неделя {w}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* F. Тесты */}
+          <section className="lk-block lk-block-airy">
+            <div className="lk-block-title">Короткие тесты</div>
+            <div className="lk-soon-grid">
+              {tests.map(s => (
+                <div key={s.name} className="lk-soon-card">
+                  <span className="lk-badge">скоро</span>
+                  <div className="lk-soon-ic">{s.ic}</div>
+                  <div className="lk-soon-name">{s.name}</div>
+                  <div className="lk-soon-desc">{s.desc}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* G. Статьи */}
+          <section className="lk-block lk-block-airy">
+            <div className="lk-block-title">Читать и применять</div>
+            <div className="lk-articles">
+              {articles.map(a => (
+                <div key={a.t} className="lk-article">
+                  <span className="lk-badge">скоро</span>
+                  <div className="lk-article-t">{a.t}</div>
+                  <div className="lk-article-d">{a.d}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* Недавно смотрели */}
+          {viewed.length > 0 && (
+            <section className="lk-block lk-block-airy">
+              <div className="lk-block-title">Вы недавно смотрели</div>
+              <div className="lk-viewed">
+                {viewed.slice(0, 8).map(p => (
+                  <div key={p.id} className="lk-viewed-item" onClick={() => onOpenProduct && onOpenProduct(p)} title="Открыть карточку">
+                    {p.image_url ? <img className="lk-viewed-thumb" src={p.image_url} alt="" /> : <div className="lk-viewed-thumb" />}
+                    <div style={{ minWidth: 0 }}>
+                      <div className="lk-viewed-name">{p.name}</div>
+                      {p.brand && <div className="lk-viewed-brand">{p.brand}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Тариф и лимиты — компактно */}
+          {!pro && (
+            <section className="lk-block lk-block-airy">
+              <div className="lk-block-title">Бесплатный тариф</div>
+              <div className="lk-meters-row">
+                <LkMeter label="Поиск по каталогу" used={usage.search} limit={FREE_LIMITS.search} />
+                <LkMeter label="Анализ своих средств" used={usage.analysis} limit={FREE_LIMITS.analysis} />
+              </div>
+              <button className="lk-primary" onClick={onSubscribe}>Открыть всё в PRO</button>
+            </section>
+          )}
+
         </div>
-
-        <div className={`lk-tariff ${pro ? "pro" : ""}`}>
-          <div>
-            <div className="lk-tariff-label">Тариф</div>
-            <div className="lk-tariff-val">{pro ? "Подписка PRO" : "Бесплатный"}</div>
-            {pro && proUntil && <div className="lk-tariff-until">активна до {proUntil}</div>}
-          </div>
-          {!pro && <button className="btn btn-primary btn-sm" onClick={onSubscribe}>Оформить подписку</button>}
-        </div>
-
-        {!pro && (
-          <div className="lk-meters">
-            <div className="lk-section-label">Использование на этой неделе</div>
-            <LkMeter label="Поиск по базе" used={usage.search} limit={FREE_LIMITS.search} />
-            <LkMeter label="Анализ своих средств" used={usage.analysis} limit={FREE_LIMITS.analysis} />
-            <div className="lk-hint">Лимиты обновляются раз в неделю. С подпиской ограничений нет.</div>
-          </div>
-        )}
-
-        {(name || email || phone) && (
-          <div className="lk-info">
-            <div className="lk-section-label">Данные аккаунта</div>
-            {name && <div className="lk-row"><span>Имя</span><b>{name}</b></div>}
-            {email && <div className="lk-row"><span>Почта</span><b>{email}</b></div>}
-            {phone && <div className="lk-row"><span>Телефон</span><b>{phone}</b></div>}
-          </div>
-        )}
-
-        <div className="lk-docs">
-          <a href={LEGAL.offer} target="_blank" rel="noopener noreferrer">Оферта</a>
-          <a href={LEGAL.policy} target="_blank" rel="noopener noreferrer">Политика</a>
-        </div>
-        <button className="lk-logout" onClick={onLogout}>Выйти из аккаунта</button>
       </div>
     </div>
   );
 }
 
-// Модал покупки подписки (CloudPayments) — стиль боевых модалок.
+// Версия приложения — показывается в «Настройках» → «О приложении».
+const APP_VERSION = "MVP · версия 0.5 (июнь 2026)";
+
+// Страница «Настройки». Здесь живут данные аккаунта, смена пароля, уведомления,
+// конфиденциальность и юр.документы — то, что убрали из кабинета ради «воздуха».
+function SettingsScreen({ onClose, onLogout }) {
+  const meta = CURRENT_USER?.user_metadata || {};
+  const email = CURRENT_USER?.email || "";
+
+  // Аккаунт
+  const [name, setName] = useState(meta.name || "");
+  const [phone, setPhone] = useState(meta.phone || "");
+  const [acctSaving, setAcctSaving] = useState(false);
+  const [acctSaved, setAcctSaved] = useState(false);
+  const [acctErr, setAcctErr] = useState("");
+  const acctDirty = name !== (meta.name || "") || phone !== (meta.phone || "");
+  const saveAccount = async () => {
+    setAcctSaving(true); setAcctErr(""); setAcctSaved(false);
+    try { await updateUserProfile({ name: name.trim(), phone: phone.trim() }); setAcctSaved(true); }
+    catch (e) { setAcctErr(e.message || "Не удалось сохранить"); }
+    finally { setAcctSaving(false); }
+  };
+
+  // Безопасность — смена пароля
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwMsg, setPwMsg] = useState("");
+  const [pwErr, setPwErr] = useState("");
+  const pwValid = pw.length >= 8 && passwordStrength(pw).score >= 2 && pw === pw2;
+  const savePassword = async () => {
+    setPwSaving(true); setPwMsg(""); setPwErr("");
+    try { await setAccountPassword(pw); setPwMsg("Пароль обновлён"); setPw(""); setPw2(""); }
+    catch (e) { setPwErr(e.message || "Не удалось сменить пароль"); }
+    finally { setPwSaving(false); }
+  };
+
+  // Уведомления — сохраняем флаг в user_metadata (fire-and-forget)
+  const [news, setNews] = useState(meta.notify_news ?? meta.ads_consent ?? false);
+  const toggleNews = (v) => { setNews(v); updateUserProfile({ notify_news: v }).catch(() => {}); };
+
+  const deleteAccount = () => {
+    const subject = encodeURIComponent("Запрос на удаление аккаунта Beauty Helper");
+    const body = encodeURIComponent(`Прошу удалить мой аккаунт и связанные с ним персональные данные.\n\nE-mail аккаунта: ${email}`);
+    window.location.href = `mailto:${LEGAL.ownerEmail}?subject=${subject}&body=${body}`;
+  };
+
+  return (
+    <div className="lk-page">
+      <div className="lk-topbar">
+        <button className="lk-back" onClick={onClose}>← Назад</button>
+        <span className="lk-topbar-title">Настройки</span>
+      </div>
+      <div className="lk-wrap">
+        <div className="lk-stack">
+
+          {/* Аккаунт */}
+          <section className="lk-block lk-block-airy">
+            <div className="lk-block-title">Аккаунт</div>
+            <div className="set-grid">
+              <div className="lk-field">
+                <label>Имя</label>
+                <input className="lk-input" value={name} onChange={e => setName(e.target.value)} placeholder="Как к Вам обращаться" />
+              </div>
+              <div className="lk-field">
+                <label>Телефон</label>
+                <input className="lk-input" value={phone} onChange={e => setPhone(sanitizePhone(e.target.value))} placeholder="+7…" inputMode="tel" />
+              </div>
+            </div>
+            <div className="lk-field">
+              <label>E-mail</label>
+              <div className="set-readonly">{email || "—"}</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 4 }}>
+              <button className="lk-primary" onClick={saveAccount} disabled={!acctDirty || acctSaving}
+                style={{ opacity: (!acctDirty || acctSaving) ? 0.55 : 1, cursor: (!acctDirty || acctSaving) ? "default" : "pointer" }}>
+                {acctSaving ? "Сохраняю…" : "Сохранить"}
+              </button>
+              {acctSaved && !acctDirty && <span className="set-saved">✓ Сохранено</span>}
+              {acctErr && <span style={{ fontSize: 12.5, color: "var(--rose)" }}>{acctErr}</span>}
+            </div>
+          </section>
+
+          {/* Безопасность */}
+          <section className="lk-block lk-block-airy">
+            <div className="lk-block-title">Безопасность</div>
+            <p className="lk-sub">Новый пароль для входа по почте. Минимум 8 символов.</p>
+            <div className="set-grid">
+              <div className="lk-field">
+                <label>Новый пароль</label>
+                <input className="lk-input" type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="Придумайте пароль" autoComplete="new-password" />
+                {pw && <PasswordStrength pw={pw} />}
+              </div>
+              <div className="lk-field">
+                <label>Повторите пароль</label>
+                <input className="lk-input" type="password" value={pw2} onChange={e => setPw2(e.target.value)} placeholder="Ещё раз" autoComplete="new-password" />
+                {pw2 && pw !== pw2 && <div className="lk-hint" style={{ color: "var(--rose)" }}>Пароли не совпадают</div>}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 4 }}>
+              <button className="lk-primary" onClick={savePassword} disabled={!pwValid || pwSaving}
+                style={{ opacity: (!pwValid || pwSaving) ? 0.55 : 1, cursor: (!pwValid || pwSaving) ? "default" : "pointer" }}>
+                {pwSaving ? "Сохраняю…" : "Сменить пароль"}
+              </button>
+              {pwMsg && <span className="set-saved">✓ {pwMsg}</span>}
+              {pwErr && <span style={{ fontSize: 12.5, color: "var(--rose)" }}>{pwErr}</span>}
+            </div>
+          </section>
+
+          {/* Уведомления */}
+          <section className="lk-block lk-block-airy">
+            <div className="lk-block-title">Уведомления</div>
+            <div className="set-row">
+              <div className="set-row-txt">
+                <div className="set-row-name">Новости и советы по уходу</div>
+                <div className="set-row-desc">Письма о новых разборах, статьях и обновлениях. Можно отключить в любой момент.</div>
+              </div>
+              <label className="set-switch">
+                <input type="checkbox" checked={!!news} onChange={e => toggleNews(e.target.checked)} />
+                <span className="track" /><span className="knob" />
+              </label>
+            </div>
+            <div className="set-row">
+              <div className="set-row-txt">
+                <div className="set-row-name">Важные уведомления об аккаунте</div>
+                <div className="set-row-desc">Безопасность, подписка, оплата. Эти письма приходят всегда.</div>
+              </div>
+              <label className="set-switch" title="Нельзя отключить">
+                <input type="checkbox" checked readOnly disabled />
+                <span className="track" /><span className="knob" />
+              </label>
+            </div>
+          </section>
+
+          {/* Конфиденциальность и данные */}
+          <section className="lk-block lk-block-airy">
+            <div className="lk-block-title">Конфиденциальность и данные</div>
+            <div className="set-links">
+              <a className="set-link" href={LEGAL.policy} target="_blank" rel="noopener noreferrer">Политика обработки персональных данных <span className="arr">→</span></a>
+              <a className="set-link" href={LEGAL.pdConsent} target="_blank" rel="noopener noreferrer">Согласие на обработку персональных данных <span className="arr">→</span></a>
+              <a className="set-link" href={LEGAL.offer} target="_blank" rel="noopener noreferrer">Публичная оферта <span className="arr">→</span></a>
+              <a className="set-link" href={LEGAL.adsConsent} target="_blank" rel="noopener noreferrer">Согласие на рекламную рассылку <span className="arr">→</span></a>
+            </div>
+            <p className="lk-sub" style={{ margin: "16px 0 12px" }}>Вы можете запросить удаление аккаунта и всех связанных персональных данных. Мы обработаем запрос в течение 30 дней.</p>
+            <button className="set-danger" onClick={deleteAccount}>Запросить удаление аккаунта</button>
+          </section>
+
+          {/* О приложении */}
+          <section className="lk-block lk-block-airy">
+            <div className="lk-block-title">О приложении</div>
+            <div className="set-about-row"><span>Версия</span><b>{APP_VERSION}</b></div>
+            <div className="set-about-row"><span>Поддержка</span><a href={`mailto:${LEGAL.ownerEmail}`} style={{ color: "var(--accent)", fontWeight: 600 }}>{LEGAL.ownerEmail}</a></div>
+            <div className="set-about-row"><span>Правообладатель</span><b>{LEGAL.ownerName}</b></div>
+            <div className="set-about-row"><span>ИНН</span><b>{LEGAL.ownerInn}</b></div>
+          </section>
+
+          <button className="set-danger" style={{ color: "var(--rose)" }} onClick={onLogout}>Выйти из аккаунта</button>
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Подсказка «Добавить на экран Домой» — показывается только в Safari на iPhone/iPad
+// (когда сайт не открыт уже как приложение). Объясняет пользу и как технически добавить.
+function AddToHomeScreen() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    let dismissed = false, force = false, consented = false;
+    try {
+      dismissed = !!localStorage.getItem("bh_a2hs_dismissed");
+      force = !!localStorage.getItem("bh_a2hs_force"); // ручной показ для предпросмотра
+      consented = !!localStorage.getItem("bh_cookie_consent");
+    } catch { /* приватный режим */ }
+    const ua = navigator.userAgent || "";
+    const iOS = /iphone|ipad|ipod/i.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const safari = /safari/i.test(ua) && !/crios|fxios|edgios|android/i.test(ua);
+    const standalone = window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
+    if (force || (iOS && safari && !standalone && !dismissed && consented)) {
+      const t = setTimeout(() => setShow(true), force ? 0 : 2500);
+      return () => clearTimeout(t);
+    }
+  }, []);
+  const close = () => { setShow(false); try { localStorage.setItem("bh_a2hs_dismissed", "1"); } catch { /* приватный режим */ } };
+  if (!show) return null;
+  const shareIcon = (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2a7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: "-2px" }}>
+      <path d="M12 3v12M8 7l4-4 4 4M6 12v6a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-6" />
+    </svg>
+  );
+  const plusBox = (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2a7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: "-2px" }}>
+      <rect x="4" y="4" width="16" height="16" rx="4" /><path d="M12 9v6M9 12h6" />
+    </svg>
+  );
+  return (
+    <div className="a2hs-overlay" onClick={e => { if (e.target === e.currentTarget) close(); }}>
+      <div className="a2hs-sheet">
+        <button className="a2hs-close" onClick={close} aria-label="Закрыть">✕</button>
+        <div className="a2hs-head">
+          <img className="a2hs-icon" src={import.meta.env.BASE_URL + "app-icon-192.png"} alt="" />
+          <div>
+            <div className="a2hs-title">Держите Beauty Helper под рукой</div>
+            <div className="a2hs-sub">Добавьте сайт на экран «Домой» — он будет открываться как приложение.</div>
+          </div>
+        </div>
+        <ul className="a2hs-benefits">
+          <li>Быстрый доступ в одно касание</li>
+          <li>Открывается на весь экран, без панелей браузера</li>
+          <li>Не потеряется среди вкладок</li>
+        </ul>
+        <div className="a2hs-steps">
+          <div className="a2hs-step"><span className="a2hs-n">1</span> Нажмите <b>«Поделиться»</b> {shareIcon} в нижней панели Safari</div>
+          <div className="a2hs-step"><span className="a2hs-n">2</span> Выберите <b>«На экран „Домой“»</b> {plusBox}</div>
+          <div className="a2hs-step"><span className="a2hs-n">3</span> Нажмите <b>«Добавить»</b> в правом верхнем углу</div>
+        </div>
+        <button className="a2hs-ok" onClick={close}>Понятно</button>
+      </div>
+    </div>
+  );
+}
+
+// Модал покупки подписки (Робокасса) — стиль боевых модалок.
 // Юр. требование: согласие с Офертой и на обработку ПД — отдельными пустыми
 // чекбоксами ДО кнопки «Оплатить», без них оплата невозможна.
 function PurchaseModal({ onClose, onSuccess }) {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(CURRENT_USER?.email || "");
   const [agreeOffer, setAgreeOffer] = useState(false);
   const [agreePd, setAgreePd] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -4785,15 +5653,16 @@ function PurchaseModal({ onClose, onSuccess }) {
     if (!agreeOffer) { setError("Для оплаты нужно согласие с условиями Оферты"); return; }
     if (!agreePd) { setError("Для оплаты нужно согласие на обработку персональных данных"); return; }
     setBusy(true); setError("");
-    openPaymentWidget({
+    // startSubscription уводит на страницу оплаты Робокассы (редирект).
+    // Сюда возвращаемся только при ошибке инициации.
+    startSubscription({
+      accessToken: ACCESS_TOKEN,
       email,
-      invoiceId: `bh-${Date.now()}`,
-      onSuccess: () => { setBusy(false); onSuccess(); },
-      onFail: (reason) => {
+      onError: (reason) => {
         setBusy(false);
-        if (reason === "no_public_id") setError("CloudPayments не настроен: добавьте VITE_CLOUDPAYMENTS_PUBLIC_ID в .env");
-        else if (reason === "script_not_loaded") setError("Не загрузился виджет оплаты. Обновите страницу");
-        else if (reason && reason !== "User has cancelled") setError("Ошибка оплаты. Попробуйте ещё раз");
+        if (reason === "not_authenticated") setError("Войдите в аккаунт, чтобы оформить подписку");
+        else if (reason === "function_not_deployed") setError("Оплата ещё не настроена. Попробуйте позже");
+        else setError("Не удалось открыть оплату. Попробуйте ещё раз");
       },
     });
   };
@@ -4815,8 +5684,8 @@ function PurchaseModal({ onClose, onSuccess }) {
         </div>
         <div className="form-group">
           <label className="form-label">Email для чека</label>
-          <input className="form-input" type="email" value={email} placeholder="you@example.com"
-            onChange={e => setEmail(e.target.value)} />
+          <input className="form-input" type="email" value={email} placeholder="you@example.com" inputMode="email"
+            onChange={e => setEmail(sanitizeEmail(e.target.value))} />
         </div>
 
         <div className="reg-consents" style={{ marginBottom: 12 }}>
@@ -4834,7 +5703,7 @@ function PurchaseModal({ onClose, onSuccess }) {
         <button className="btn btn-primary" style={{ width: "100%" }} onClick={pay} disabled={busy}>
           {busy ? "Открываем оплату…" : "Оплатить 3 490 ₽"}
         </button>
-        <div className="purchase-note">Оплата через CloudPayments · Отмена в любой момент</div>
+        <div className="purchase-note">Оплата через Робокассу · Автопродление, отмена в любой момент</div>
       </div>
     </div>
   );
