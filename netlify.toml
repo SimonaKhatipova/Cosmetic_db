@@ -5,6 +5,10 @@
   command = "npm run build"
   publish = "dist"
 
+# Vite 8 требует свежий Node — фиксируем, чтобы сборка на Netlify не упала на старом.
+[build.environment]
+  NODE_VERSION = "22"
+
 # Любой путь отдаём index.html (React-приложение само разбирает маршрут).
 [[redirects]]
   from = "/*"
